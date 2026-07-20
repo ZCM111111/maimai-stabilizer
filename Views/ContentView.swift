@@ -20,6 +20,11 @@ struct ContentView: View {
 
                 // ── 底部控制 ──
                 VStack(spacing: 12) {
+                    // 鱼眼矫正
+                    Toggle("鱼眼矫正", isOn: $camera.fisheyeOn)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 40)
                     // 画质
                     Picker("画质", selection: $camera.quality) {
                         ForEach(RecordingQuality.allCases) { q in

@@ -63,6 +63,10 @@ final class CameraManager: NSObject, ObservableObject {
 
     nonisolated(unsafe) var previewFrameHandler: ((CIImage) -> Void)? = nil
 
+    // Fisheye
+    private let fisheye = FisheyeCorrector()
+    @Published var fisheyeOn = false
+
     // MARK: - Crop geometry
 
     private let cropFraction: Double = 3.0 / 5.0 * 0.90
@@ -310,7 +314,8 @@ final class CameraManager: NSObject, ObservableObject {
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
+        let oriented = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
+        let ciImage = fisheyeOn ? (fisheye?.correct(oriented) ?? oriented) : oriented
         let pW: CGFloat = ciImage.extent.width
         let pH: CGFloat = ciImage.extent.height
 
