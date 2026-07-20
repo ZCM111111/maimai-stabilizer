@@ -223,12 +223,12 @@ final class CameraManager: NSObject, ObservableObject {
         guard let writer = try? AVAssetWriter(url: url, fileType: .mov) else { return }
 
         let videoSettings: [String: Any] = [
-            AVVideoCodecKey:  AVVideoCodecType.hevc,
+            AVVideoCodecKey:  AVVideoCodecType.h264,
             AVVideoWidthKey:  outW,
             AVVideoHeightKey: outH,
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey:      quality.bitRate,
-                AVVideoMaxKeyFrameIntervalKey: 60
+                AVVideoAverageBitRateKey:      10_000_000,
+                AVVideoMaxKeyFrameIntervalKey: 30
             ]
         ]
         let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
