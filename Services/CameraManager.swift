@@ -67,7 +67,7 @@ final class CameraManager: NSObject, ObservableObject {
     private let fisheye = FisheyeCorrector()
     @Published var fisheyeOn = false
     @Published var fisheyeStrength: Float = 2.0 {
-        didSet { fisheye?.strength = fisheyeStrength }
+        didSet { fisheye.strength = fisheyeStrength }
     }
 
     // MARK: - Crop geometry
