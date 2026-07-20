@@ -297,14 +297,8 @@ final class CameraManager: NSObject, ObservableObject {
             .cropped(to: cropRect)
             .transformed(by: CGAffineTransform(translationX: -cropRect.minX, y: -cropRect.minY))
 
-        // 预览（缩放到 1080 宽，降低延迟）
-        let previewScale = min(1.0, 1080.0 / result.extent.width)
-        let preview = previewScale < 1.0
-            ? result.transformed(by: CGAffineTransform(scaleX: previewScale, y: previewScale))
-            : result
-        DispatchQueue.main.async { [weak self] in
-            self?.previewFrame?(preview)
-        }
+        // 预览（直接回调，不 dispatch 到 main — MTKView.enqueue 本身线程安全）
+        previewFrame?(result)
 
         // 录制
         writeFrame(result, pts: CMSampleBufferGetPresentationTimeStamp(buf))
