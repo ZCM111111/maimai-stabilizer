@@ -21,12 +21,11 @@ final class FisheyeCorrector {
                             float fx, float fy, float cx, float cy,
                             float k1, float k2, float k3, float k4, float k5)
         {
-            float2 p = samplerCoord(src);
-            float xn = (p.x - cx) / fx;
-            float yn = (p.y - cy) / fy;
-            float r2 = xn*xn + yn*yn;
-            float r = sqrt(r2);
-            if (r < 0.0001) return sample(src, p);
+            float2 dc = destCoord();
+            float xn = (dc.x - cx) / fx;
+            float yn = (dc.y - cy) / fy;
+            float r = sqrt(xn*xn + yn*yn);
+            if (r < 0.0001) return sample(src, samplerCoord(src));
 
             float theta = atan(r);
             float th2 = theta * theta;
@@ -34,11 +33,15 @@ final class FisheyeCorrector {
             float scale = thd / r;
 
             float2 sp = float2(fx * xn * scale + cx, fy * yn * scale + cy);
-            return sample(src, samplerTransform(src, sp));
+            return sample(src, sp);
         }
         """
-        guard let k = CIKernel(source: src) else { return nil }
+        guard let k = CIKernel(source: src) else {
+            print("⚠️ Fisheye CIKernel 编译失败")
+            return nil
+        }
         self.warpKernel = k
+        print("✓ Fisheye CIKernel 就绪")
     }
 
     func correct(_ image: CIImage) -> CIImage? {
