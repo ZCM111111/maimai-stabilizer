@@ -29,12 +29,14 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - Data output
 
     private let videoDataOutput = AVCaptureVideoDataOutput()
+    private let audioDataOutput = AVCaptureAudioDataOutput()
     private let dataOutputQueue = DispatchQueue(label: "maimai.data", qos: .userInteractive)
 
     // MARK: - Writer (all accessed exclusively on dataOutputQueue)
 
     nonisolated(unsafe) private var assetWriter: AVAssetWriter?
     nonisolated(unsafe) private var videoWriterInput: AVAssetWriterInput?
+    nonisolated(unsafe) private var audioWriterInput: AVAssetWriterInput?
     nonisolated(unsafe) private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     nonisolated(unsafe) private var recordingURL: URL?
     nonisolated(unsafe) private var sessionAtSourceTime = false
@@ -65,8 +67,8 @@ final class CameraManager: NSObject, ObservableObject {
 
     // Fisheye
     private let fisheye = FisheyeCorrector()
-    @Published var fisheyeOn = false
-    @Published var fisheyeStrength: Float = 3.0 {
+    @Published var fisheyeOn = true
+    @Published var fisheyeStrength: Float = 0.5 {
         didSet { fisheye.strength = fisheyeStrength }
     }
 
@@ -143,6 +145,15 @@ final class CameraManager: NSObject, ObservableObject {
         videoDataOutput.setSampleBufferDelegate(self, queue: dataOutputQueue)
         guard session.canAddOutput(videoDataOutput) else { return }
         session.addOutput(videoDataOutput)
+
+        // 麦克风
+        if let mic = AVCaptureDevice.default(for: .audio),
+           let micInput = try? AVCaptureDeviceInput(device: mic),
+           session.canAddInput(micInput) {
+            session.addInput(micInput)
+        }
+        audioDataOutput.setSampleBufferDelegate(self, queue: dataOutputQueue)
+        if session.canAddOutput(audioDataOutput) { session.addOutput(audioDataOutput) }
 
         // 硬件防抖
         if let conn = videoDataOutput.connection(with: .video), conn.isVideoStabilizationSupported {
@@ -259,10 +270,16 @@ final class CameraManager: NSObject, ObservableObject {
 
         guard writer.canAdd(vInput) else { print("❌ cannot add input"); return }
         writer.add(vInput)
+
+        let aInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
+        aInput.expectsMediaDataInRealTime = true
+        if writer.canAdd(aInput) { writer.add(aInput) }
+
         guard writer.startWriting() else { print("❌ startWriting failed:", writer.error as Any); return }
 
         assetWriter        = writer
         videoWriterInput   = vInput
+        audioWriterInput   = aInput
         pixelBufferAdaptor = adaptor
         recordingURL       = url
         sessionAtSourceTime = false
@@ -277,6 +294,7 @@ final class CameraManager: NSObject, ObservableObject {
         isRecordingFlag    = false
         assetWriter        = nil
         videoWriterInput   = nil
+        audioWriterInput   = nil
         pixelBufferAdaptor = nil
         DispatchQueue.main.async { self.isRecording = false }
 
@@ -398,12 +416,21 @@ final class CameraManager: NSObject, ObservableObject {
 
 // MARK: - Delegate
 
-extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate,
+                          AVCaptureAudioDataOutputSampleBufferDelegate {
     nonisolated func captureOutput(_ output: AVCaptureOutput,
                                    didOutput sampleBuffer: CMSampleBuffer,
                                    from connection: AVCaptureConnection) {
         if output is AVCaptureVideoDataOutput {
             processVideoFrame(sampleBuffer)
+        } else if output is AVCaptureAudioDataOutput {
+            guard isRecordingFlag,
+                  let writer = assetWriter,
+                  let aInput = audioWriterInput,
+                  writer.status == .writing,
+                  sessionAtSourceTime,
+                  aInput.isReadyForMoreMediaData else { return }
+            aInput.append(sampleBuffer)
         }
     }
 }

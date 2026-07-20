@@ -34,3 +34,4 @@ targets:
         ENABLE_PREVIEWS: "NO"
         INFOPLIST_KEY_NSCameraUsageDescription: "采集视频进行地平线稳定"
         INFOPLIST_KEY_NSMotionUsageDescription: "采集陀螺仪数据进行画面反旋转"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "录制视频需要采集音频"
