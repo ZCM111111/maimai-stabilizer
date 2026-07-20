@@ -1,63 +1,57 @@
 import CoreImage
 
-/// OpenCV 鱼眼模型矫正（标定参数：2160×3840竖屏基准）
 final class FisheyeCorrector {
 
-    // 标定值（来自 chessboard_calibrate.py）
-    private let calib: (fx: Float, fy: Float, cx: Float, cy: Float) = (932.7, 936.5, 1111.3, 1846.5)
-    private let k: (Float, Float, Float, Float, Float) = (-0.22327126, 0.04652081, 0.00112181, 0.00183698, -0.00408785)
+    private let calibFx: Float = 932.7
+    private let calibFy: Float = 936.5
+    private let calibCx: Float = 1111.3
+    private let calibCy: Float = 1846.5
     private let calibW: Float = 2160
     private let calibH: Float = 3840
 
-    private let warpKernel: CIKernel
-    private var mapX: CIImage? = nil
-    private var mapY: CIImage? = nil
-    private var mapSize: CGSize = .zero
+    private let k1: Float = -0.22327126
+    private let k2: Float =  0.04652081
+    private let k3: Float =  0.00112181
+    private let k4: Float =  0.00183698
+    private let k5: Float = -0.00408785
+
+    private let kernel: CIWarpKernel
 
     init?() {
         let src = """
         #include <CoreImage/CoreImage.h>
-        kernel vec4 fisheye(sampler src,
-                            float fx, float fy, float cx, float cy,
-                            float k1, float k2, float k3, float k4, float k5)
+        kernel vec2 fisheyeWarp(float fx, float fy, float cx, float cy,
+                                float k1, float k2, float k3, float k4, float k5)
         {
-            float2 dc = destCoord();
-            float xn = (dc.x - cx) / fx;
-            float yn = (dc.y - cy) / fy;
+            float2 p = destCoord();
+            float xn = (p.x - cx) / fx;
+            float yn = (p.y - cy) / fy;
             float r = sqrt(xn*xn + yn*yn);
-            if (r < 0.0001) return sample(src, samplerCoord(src));
-
+            float r0 = r;
+            if (r < 0.001) return p;
             float theta = atan(r);
             float th2 = theta * theta;
-            float thd = theta * (1.0 + th2 * (k1 + th2 * (k2 + th2 * (k3 + th2 * (k4 + th2 * k5)))));
-            float scale = thd / r;
-
-            float2 sp = float2(fx * xn * scale + cx, fy * yn * scale + cy);
-            return sample(src, sp);
+            float thd = theta * (1.0 + th2*(k1 + th2*(k2 + th2*(k3 + th2*(k4 + th2*k5)))));
+            float s = thd / r;
+            return float2(fx*xn*s + cx, fy*yn*s + cy);
         }
         """
-        guard let k = CIKernel(source: src) else {
-            print("⚠️ Fisheye CIKernel 编译失败")
+        guard let k = CIWarpKernel(source: src) else {
+            print("⚠️ CIWarpKernel 编译失败")
             return nil
         }
-        self.warpKernel = k
-        print("✓ Fisheye CIKernel 就绪")
+        self.kernel = k
     }
 
     func correct(_ image: CIImage) -> CIImage? {
         let w = Float(image.extent.width)
         let h = Float(image.extent.height)
-
-        // 缩放到当前图像尺寸
         let sx = w / calibW
         let sy = h / calibH
-        let fx = calib.fx * sx
-        let fy = calib.fy * sy
-        let cx = calib.cx * sx
-        let cy = calib.cy * sy
-
-        return warpKernel.apply(extent: image.extent,
-                                roiCallback: { _, rect in rect.insetBy(dx: -50, dy: -50) },
-                                arguments: [image, fx, fy, cx, cy, k.0, k.1, k.2, k.3, k.4] as [Any])
+        return kernel.apply(extent: image.extent,
+                            roiCallback: { _, _ in image.extent },
+                            image: image,
+                            arguments: [calibFx*sx, calibFy*sy, calibCx*sx, calibCy*sy,
+                                        k1, k2, k3, k4, k5] as [Any])
     }
 }
