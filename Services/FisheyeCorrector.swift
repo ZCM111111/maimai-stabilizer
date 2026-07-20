@@ -1,18 +1,17 @@
 import CoreImage
 import Metal
 
-/// Metal compute 鱼眼矫正
 final class FisheyeCorrector {
 
-    var strength: Float = 2.0  // 矫正强度，1=标定值，越大越强
+    var strength: Float = 2.0
 
-    private let ps: MTLComputePipelineState
     private let dev: MTLDevice
     private let queue: MTLCommandQueue
+    private let ps: MTLComputePipelineState
 
-    init() {
-        let d = MTLCreateSystemDefaultDevice()!
-        let q = d.makeCommandQueue()!
+    init?() {
+        guard let d = MTLCreateSystemDefaultDevice(),
+              let q = d.makeCommandQueue() else { return nil }
         self.dev = d; self.queue = q
 
         let src = """
@@ -27,11 +26,8 @@ final class FisheyeCorrector {
             if (gid.x >= out.get_width() || gid.y >= out.get_height()) return;
             float fx = p.x, fy = p.y, cx = p.z, cy = p.w;
             float s2 = max(strength, 0.0);
-            float k1 = -0.22327126 * s2;
-            float k2 =  0.04652081 * s2;
-            float k3 =  0.00112181 * s2;
-            float k4 =  0.00183698 * s2;
-            float k5 = -0.00408785 * s2;
+            float kn1 = -0.22327126 * s2, kn2 = 0.04652081 * s2, kn3 = 0.00112181 * s2;
+            float kn4 = 0.00183698 * s2, kn5 = -0.00408785 * s2;
             float2 dp = float2(gid) + 0.5;
             float xn = (dp.x - cx) / fx;
             float yn = (dp.y - cy) / fy;
@@ -41,16 +37,21 @@ final class FisheyeCorrector {
             else {
                 float th = atan(r);
                 float th2 = th*th;
-                float thd = th*(1.0 + th2*(k1 + th2*(k2 + th2*(k3 + th2*(k4 + th2*k5)))));
-                sp = float2(fx*xn*(thd/r) + cx, fy*yn*(thd/r) + cy);
+                float thd = th*(1.0 + th2*(kn1 + th2*(kn2 + th2*(kn3 + th2*(kn4 + th2*kn5)))));
+                float s = thd / r;
+                sp = float2(fx*xn*s + cx, fy*yn*s + cy);
             }
-            constexpr sampler s(coord::pixel, address::clamp_to_edge, filter::linear);
-            out.write(in.sample(s, sp), gid);
+            constexpr sampler smp(coord::pixel, address::clamp_to_edge, filter::linear);
+            out.write(in.sample(smp, sp), gid);
         }
         """
-        let lib = try! d.makeLibrary(source: src, options: nil)
-        let fn = lib.makeFunction(name: "correct")!
-        self.ps = try! d.makeComputePipelineState(function: fn)
+        guard let lib = try? d.makeLibrary(source: src, options: nil),
+              let fn = lib.makeFunction(name: "correct"),
+              let p = try? d.makeComputePipelineState(function: fn) else {
+            print("❌ Metal shader compile failed")
+            return nil
+        }
+        self.ps = p
     }
 
     func correct(_ image: CIImage) -> CIImage? {
@@ -62,8 +63,7 @@ final class FisheyeCorrector {
         guard let inTex = dev.makeTexture(descriptor: desc),
               let outTex = dev.makeTexture(descriptor: desc) else { return nil }
 
-        CIContext().render(image, to: inTex,
-                           commandBuffer: nil,
+        CIContext().render(image, to: inTex, commandBuffer: nil,
                            bounds: image.extent,
                            colorSpace: CGColorSpaceCreateDeviceRGB())
 
@@ -88,7 +88,8 @@ final class FisheyeCorrector {
         buf.commit()
         buf.waitUntilCompleted()
 
-        return CIImage(mtlTexture: outTex, options: [.colorSpace: CGColorSpaceCreateDeviceRGB()])?
+        return CIImage(mtlTexture: outTex,
+                       options: [.colorSpace: CGColorSpaceCreateDeviceRGB() as Any])?
             .cropped(to: image.extent)
     }
 }
