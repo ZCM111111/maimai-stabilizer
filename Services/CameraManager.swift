@@ -314,8 +314,9 @@ final class CameraManager: NSObject, ObservableObject {
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        let oriented = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
-        let ciImage = fisheyeOn ? (fisheye?.correct(oriented) ?? oriented) : oriented
+        let raw = CIImage(cvPixelBuffer: pixelBuffer)
+        let corrected = fisheyeOn ? (fisheye?.correct(raw) ?? raw) : raw
+        let ciImage = corrected.oriented(.right)
         let pW: CGFloat = ciImage.extent.width
         let pH: CGFloat = ciImage.extent.height
 
