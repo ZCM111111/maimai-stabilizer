@@ -72,6 +72,11 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - Lifecycle
 
     func start() {
+        // 提前申请相册权限
+        if PHPhotoLibrary.authorizationStatus(for: .addOnly) == .notDetermined {
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { _ in }
+        }
+
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:    startSession()
         case .notDetermined:
@@ -220,7 +225,9 @@ final class CameraManager: NSObject, ObservableObject {
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("mov")
 
-        guard let writer = try? AVAssetWriter(url: url, fileType: .mov) else { return }
+        guard let writer = try? AVAssetWriter(url: url, fileType: .mov) else {
+            print("❌ AVAssetWriter 创建失败"); return
+        }
 
         let videoSettings: [String: Any] = [
             AVVideoCodecKey:  AVVideoCodecType.h264,
