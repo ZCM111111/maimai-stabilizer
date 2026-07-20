@@ -68,7 +68,7 @@ final class CameraManager: NSObject, ObservableObject {
     // Fisheye
     private let fisheye = FisheyeCorrector()
     @Published var fisheyeOn = true
-    @Published var fisheyeStrength: Float = 0.5 {
+    @Published var fisheyeStrength: Float = 0.8 {
         didSet { fisheye.strength = fisheyeStrength }
     }
 
