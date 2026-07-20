@@ -1,0 +1,32 @@
+workflows:
+  build:
+    name: Build IPA
+    environment:
+      xcode: 16.2
+      vars:
+        XC_SCHEME: MaimaiStabilizer
+    scripts:
+      - name: Install xcbeautify
+        script: brew install xcbeautify
+      - name: Generate Xcode project
+        script: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build unsigned IPA
+        script: |
+          xcodebuild build -project "MaimaiStabilizer.xcodeproj" \
+            -scheme MaimaiStabilizer \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" | xcbeautify
+      - name: Package IPA
+        script: |
+          mkdir -p Payload
+          cp -r build/Build/Products/Release-iphoneos/MaimaiStabilizer.app Payload/
+          zip -r MaimaiStabilizer.ipa Payload
+    artifacts:
+      - MaimaiStabilizer.ipa
