@@ -253,7 +253,7 @@ final class CameraManager: NSObject, ObservableObject {
         smoothOffX  += transAlpha * (snap.offsetX - smoothOffX)
         smoothOffY  += transAlpha * (snap.offsetY - smoothOffY)
 
-        let angle = CGFloat(-smoothRoll)
+        let angle = CGFloat(smoothRoll)  // 反旋转抵消手机倾斜
         let cx = w / 2; let cy = h / 2
 
         let rotated = ci.transformed(by:
@@ -284,9 +284,13 @@ final class CameraManager: NSObject, ObservableObject {
             .cropped(to: cropRect)
             .transformed(by: CGAffineTransform(translationX: -cropRect.minX, y: -cropRect.minY))
 
-        // 预览
+        // 预览（缩放到 1080 宽，降低延迟）
+        let previewScale = min(1.0, 1080.0 / result.extent.width)
+        let preview = previewScale < 1.0
+            ? result.transformed(by: CGAffineTransform(scaleX: previewScale, y: previewScale))
+            : result
         DispatchQueue.main.async { [weak self] in
-            self?.previewFrame?(result)
+            self?.previewFrame?(preview)
         }
 
         // 录制
