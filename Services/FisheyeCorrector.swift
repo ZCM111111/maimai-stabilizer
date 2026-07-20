@@ -10,9 +10,9 @@ final class FisheyeCorrector {
     private let dev: MTLDevice
     private let queue: MTLCommandQueue
 
-    init?() {
-        guard let d = MTLCreateSystemDefaultDevice(),
-              let q = d.makeCommandQueue() else { return nil }
+    init() {
+        let d = MTLCreateSystemDefaultDevice()!
+        let q = d.makeCommandQueue()!
         self.dev = d; self.queue = q
 
         let src = """
@@ -48,12 +48,9 @@ final class FisheyeCorrector {
             out.write(in.sample(s, sp), gid);
         }
         """
-        guard let lib = try? d.makeLibrary(source: src, options: nil),
-              let fn = lib.makeFunction(name: "correct"),
-              let p = try? d.makeComputePipelineState(function: fn) else {
-            print("❌ Metal PS fail"); return nil
-        }
-        self.ps = p
+        let lib = try! d.makeLibrary(source: src, options: nil)
+        let fn = lib.makeFunction(name: "correct")!
+        self.ps = try! d.makeComputePipelineState(function: fn)
     }
 
     func correct(_ image: CIImage) -> CIImage? {
