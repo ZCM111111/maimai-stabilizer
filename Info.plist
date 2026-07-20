@@ -19,5 +19,7 @@
     <key>UIStatusBarHidden</key><true/>
     <key>NSCameraUsageDescription</key><string>采集视频进行地平线稳定</string>
     <key>NSMotionUsageDescription</key><string>采集陀螺仪数据进行画面反旋转</string>
+    <key>NSPhotoLibraryAddUsageDescription</key><string>保存稳定后的视频到相册</string>
+    <key>NSPhotoLibraryUsageDescription</key><string>访问相册保存录制的视频</string>
 </dict>
 </plist>
