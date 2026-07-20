@@ -116,7 +116,7 @@ final class CameraManager: NSObject, ObservableObject {
               session.canAddInput(input) else { return }
         session.addInput(input)
 
-        enforce4by3_60fps(device)
+        enforceBestFormat(device)
 
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.videoSettings = [
@@ -138,26 +138,39 @@ final class CameraManager: NSObject, ObservableObject {
         AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
     }
 
-    /// 4:3 格式 + 强制 60fps
-    private func enforce4by3_60fps(_ device: AVCaptureDevice) {
+    /// 4:3 格式 + 最优帧率（优先60, 回退30）
+    private func enforceBestFormat(_ device: AVCaptureDevice) {
         let target = 4.0 / 3.0
-        var best: (AVCaptureDevice.Format, Int32, Float)? = nil
+        var best60: (AVCaptureDevice.Format, Int32)? = nil
+        var best30: (AVCaptureDevice.Format, Int32)? = nil
 
         for fmt in device.formats {
             let d = CMVideoFormatDescriptionGetDimensions(fmt.formatDescription)
-            guard d.width > 0, abs(Double(d.width) / Double(d.height) - target) < 0.01 else { continue }
+            guard d.width > 0, d.height > 0,
+                  abs(Double(d.width) / Double(d.height) - target) < 0.01 else { continue }
             let maxFPS = fmt.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
-            guard maxFPS >= 60 else { continue }
-            if d.width > (best?.1 ?? 0) { best = (fmt, d.width, 60) }
+            guard maxFPS >= 30 else { continue }
+            if maxFPS >= 60 {
+                if d.width > (best60?.1 ?? 0) { best60 = (fmt, d.width) }
+            } else {
+                if d.width > (best30?.1 ?? 0) { best30 = (fmt, d.width) }
+            }
         }
 
-        guard let (fmt, _, _) = best else { return }
+        guard let (fmt, _) = best60 ?? best30 else { return }
+        let maxFPS = fmt.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 30
+        let fps: Int32 = maxFPS >= 60 ? 60 : 30
+
         try? device.lockForConfiguration()
         device.activeFormat = fmt
-        let dur = CMTime(value: 1, timescale: 60)
+        let dur = CMTime(value: 1, timescale: fps)
         device.activeVideoMinFrameDuration = dur
         device.activeVideoMaxFrameDuration = dur
-        device.videoZoomFactor = 1.0
+        if #available(iOS 17.0, *) {
+            device.videoZoomFactor = max(1.0, device.minAvailableVideoZoomFactor)
+        } else {
+            device.videoZoomFactor = 1.0
+        }
         device.unlockForConfiguration()
     }
 
@@ -253,7 +266,7 @@ final class CameraManager: NSObject, ObservableObject {
         smoothOffX  += transAlpha * (snap.offsetX - smoothOffX)
         smoothOffY  += transAlpha * (snap.offsetY - smoothOffY)
 
-        let angle = CGFloat(smoothRoll)  // 反旋转抵消手机倾斜
+        let angle = CGFloat(-smoothRoll)
         let cx = w / 2; let cy = h / 2
 
         let rotated = ci.transformed(by:
