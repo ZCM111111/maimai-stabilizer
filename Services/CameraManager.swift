@@ -3,6 +3,7 @@ import CoreImage
 import CoreVideo
 import Photos
 import UIKit
+import VideoToolbox
 
 // MARK: - Recording Quality
 
@@ -186,7 +187,6 @@ final class CameraManager: NSObject, ObservableObject {
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: quality.bitRate,
                 AVVideoMaxKeyFrameIntervalKey: 60,
-                AVVideoExpectedFrameRateKey: 60,
                 AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main_AutoLevel
             ]
         ]
