@@ -1,32 +1,30 @@
 workflows:
   build:
     name: Build IPA
-    environment:
-      xcode: 16.2
-      vars:
-        XC_SCHEME: MaimaiStabilizer
+    instance_type: mac_mini_m1
+    max_build_duration: 25
+    environment: {xcode: "16.2"}
+    triggering:
+      events: [push]
+      branch_patterns: [{pattern: main}]
+      cancel_previous_builds: true
     scripts:
-      - name: Install xcbeautify
-        script: brew install xcbeautify
-      - name: Generate Xcode project
+      - name: Build
         script: |
-          brew install xcodegen
+          brew install xcodegen xcbeautify 2>/dev/null
           xcodegen generate
-      - name: Build unsigned IPA
+          set -o pipefail
+          xcodebuild build -project MaimaiStabilizer.xcodeproj -scheme MaimaiStabilizer \
+            -destination 'generic/platform=iOS' -configuration Debug \
+            ONLY_ACTIVE_ARCH=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_ENTITLEMENTS="" \
+            PROVISIONING_PROFILE_SPECIFIER="" DEVELOPMENT_TEAM="" \
+            2>&1 | xcbeautify --quiet
+      - name: Package
         script: |
-          xcodebuild build -project "MaimaiStabilizer.xcodeproj" \
-            -scheme MaimaiStabilizer \
-            -sdk iphoneos \
-            -configuration Release \
-            -derivedDataPath build \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            DEVELOPMENT_TEAM="" | xcbeautify
-      - name: Package IPA
-        script: |
-          mkdir -p Payload
-          cp -r build/Build/Products/Release-iphoneos/MaimaiStabilizer.app Payload/
-          zip -r MaimaiStabilizer.ipa Payload
-    artifacts:
-      - MaimaiStabilizer.ipa
+          D=$(xcodebuild -project MaimaiStabilizer.xcodeproj -scheme MaimaiStabilizer \
+            -showBuildSettings -configuration Debug 2>/dev/null | grep "^    BUILT_PRODUCTS_DIR" | head -1 | sed 's/.*= //')
+          A=$(xcodebuild -project MaimaiStabilizer.xcodeproj -scheme MaimaiStabilizer \
+            -showBuildSettings -configuration Debug 2>/dev/null | grep "^    FULL_PRODUCT_NAME" | head -1 | sed 's/.*= //')
+          mkdir -p Payload && cp -R "$D/$A" Payload/ && zip -r MaimaiStabilizer.ipa Payload/ && rm -rf Payload && ls -lh MaimaiStabilizer.ipa
+    artifacts: [MaimaiStabilizer.ipa]
