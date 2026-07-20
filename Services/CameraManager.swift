@@ -1,20 +1,44 @@
 import AVFoundation
 import CoreImage
 import CoreVideo
-import Metal
-import QuartzCore
+import Photos
+import UIKit
 
-/// 超广角采集 + 陀螺仪地平线稳定管线
+// MARK: - Recording Quality
+
+enum RecordingQuality: String, CaseIterable, Identifiable {
+    case hd1080p60 = "1080p 60fps"
+    case k4k60     = "4K 60fps"
+
+    var id: String { rawValue }
+
+    /// 输出分辨率（3:4 竖屏）
+    var outputSize: (Int, Int) {
+        switch self {
+        case .hd1080p60: return (1080, 1440)
+        case .k4k60:      return (2160, 2880)
+        }
+    }
+
+    var bitRate: Int {
+        switch self {
+        case .hd1080p60: return 20_000_000
+        case .k4k60:      return 50_000_000
+        }
+    }
+}
+
+// MARK: - Camera Manager
+
+/// 超广角 60fps 采集 + 地平线稳定 + 录制
 final class CameraManager: NSObject, ObservableObject {
 
-    // MARK: - Public
-
     @Published var isRunning = false
+    @Published var isRecording = false
+    @Published var quality: RecordingQuality = .hd1080p60
+    @Published var lastVideoURL: URL?
 
-    /// MTKView 预览回调：主线程收到已处理的 CIImage
     var previewFrame: ((CIImage) -> Void)?
-
-    /// 陀螺仪快照提供者（由 MotionManager 注入）
     var motionSnapshot: () -> (roll: Double, offsetX: Double, offsetY: Double) = { (0, 0, 0) }
 
     // MARK: - Session
@@ -27,37 +51,42 @@ final class CameraManager: NSObject, ObservableObject {
     private let videoOutput = AVCaptureVideoDataOutput()
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
-    // MARK: - Smoothing state (dataQueue only)
+    // MARK: - Smoothing state
 
     private var smoothRoll: Double = 0.0
     private var smoothOffX: Double = 0.0
     private var smoothOffY: Double = 0.0
+    private let rollAlpha: Double = 0.25
+    private let transAlpha: Double = 0.10
 
-    private let rollAlpha: Double = 0.25        // roll 平滑
-    private let transAlpha: Double = 0.10       // 平移平滑
+    // MARK: - Crop
 
-    // MARK: - Crop constants
-
-    /// 裁剪比例：取短边的 54%，3:4 宽高比
     private let cropScale: Double = 3.0 / 5.0 * 0.90
-    private let cropRatio: Double = 3.0 / 4.0   // 宽:高
+    private let cropRatio: Double = 3.0 / 4.0
+
+    // MARK: - Recording (dataQueue only)
+
+    private var writer: AVAssetWriter?
+    private var writerInput: AVAssetWriterInput?
+    private var pixelAdaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var recordingURL: URL?
+    private var sessionAtSourceTime = false
 
     // MARK: - Lifecycle
 
     func start() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            startSession()
+        case .authorized:            startSession()
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] ok in
                 if ok { self?.startSession() }
             }
-        default:
-            break
+        default: break
         }
     }
 
     func stop() {
+        dataQueue.async { [weak self] in self?.finishRecording() }
         sessionQueue.async { [weak self] in
             guard let self else { return }
             if self.session.isRunning { self.session.stopRunning() }
@@ -67,12 +96,9 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func startSession() {
         sessionQueue.async { [weak self] in
-            guard let self, !self.configured else {
-                if !(self?.session.isRunning ?? false) { self?.session.startRunning() }
-                return
-            }
-            self.configure()
-            self.session.startRunning()
+            guard let self else { return }
+            if !self.configured { self.configure() }
+            if !self.session.isRunning { self.session.startRunning() }
             DispatchQueue.main.async { self.isRunning = true }
         }
     }
@@ -84,14 +110,12 @@ final class CameraManager: NSObject, ObservableObject {
         session.sessionPreset = .inputPriority
         defer { session.commitConfiguration(); configured = true }
 
-        // 优先超广角 → 回退广角
         guard let device = ultraWide() ?? wide(),
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else { return }
         session.addInput(input)
 
-        // 4:3 + 最高帧率
-        enforce4by3(device)
+        enforce4by3_60fps(device)
 
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.videoSettings = [
@@ -101,7 +125,6 @@ final class CameraManager: NSObject, ObservableObject {
         guard session.canAddOutput(videoOutput) else { return }
         session.addOutput(videoOutput)
 
-        // 硬件防抖
         if let conn = videoOutput.connection(with: .video), conn.isVideoStabilizationSupported {
             conn.preferredVideoStabilizationMode = .cinematicExtended
         }
@@ -110,12 +133,12 @@ final class CameraManager: NSObject, ObservableObject {
     private func ultraWide() -> AVCaptureDevice? {
         AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back)
     }
-
     private func wide() -> AVCaptureDevice? {
         AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
     }
 
-    private func enforce4by3(_ device: AVCaptureDevice) {
+    /// 4:3 格式 + 强制 60fps
+    private func enforce4by3_60fps(_ device: AVCaptureDevice) {
         let target = 4.0 / 3.0
         var best: (AVCaptureDevice.Format, Int32, Float)? = nil
 
@@ -123,19 +146,96 @@ final class CameraManager: NSObject, ObservableObject {
             let d = CMVideoFormatDescriptionGetDimensions(fmt.formatDescription)
             guard d.width > 0, abs(Double(d.width) / Double(d.height) - target) < 0.01 else { continue }
             let maxFPS = fmt.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
-            guard maxFPS >= 30 else { continue }
-            let fps: Float = maxFPS >= 60 ? 60 : 30
-            if d.width > (best?.1 ?? 0) { best = (fmt, d.width, fps) }
+            guard maxFPS >= 60 else { continue }
+            if d.width > (best?.1 ?? 0) { best = (fmt, d.width, 60) }
         }
 
-        guard let (fmt, _, fps) = best else { return }
+        guard let (fmt, _, _) = best else { return }
         try? device.lockForConfiguration()
         device.activeFormat = fmt
-        let dur = CMTime(value: 1, timescale: Int32(fps))
+        let dur = CMTime(value: 1, timescale: 60)
         device.activeVideoMinFrameDuration = dur
         device.activeVideoMaxFrameDuration = dur
         device.videoZoomFactor = 1.0
         device.unlockForConfiguration()
+    }
+
+    // MARK: - Recording controls
+
+    func toggleRecording() {
+        dataQueue.async { [weak self] in
+            guard let self else { return }
+            if self.isRecording { self.finishRecording() }
+            else { self.beginRecording() }
+        }
+    }
+
+    private func beginRecording() {
+        let (outW, outH) = quality.outputSize
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mov")
+
+        guard let w = try? AVAssetWriter(url: url, fileType: .mov) else { return }
+
+        let settings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.hevc,
+            AVVideoWidthKey: outW,
+            AVVideoHeightKey: outH,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: quality.bitRate,
+                AVVideoMaxKeyFrameIntervalKey: 60,
+                AVVideoExpectedFrameRateKey: 60,
+                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main_AutoLevel
+            ]
+        ]
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        input.expectsMediaDataInRealTime = true
+        input.transform = .identity
+
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: outW,
+                kCVPixelBufferHeightKey as String: outH
+            ])
+
+        guard w.canAdd(input), w.startWriting() else { return }
+        w.add(input)
+
+        writer = w
+        writerInput = input
+        pixelAdaptor = adaptor
+        recordingURL = url
+        sessionAtSourceTime = false
+        isRecording = true
+    }
+
+    private func finishRecording() {
+        guard let w = writer, isRecording else { return }
+        isRecording = false
+        writer = nil
+        writerInput = nil
+        pixelAdaptor = nil
+
+        let url = recordingURL
+        recordingURL = nil
+
+        w.finishWriting { [weak self] in
+            guard let self, let url, w.status == .completed else { return }
+            DispatchQueue.main.async { self.lastVideoURL = url }
+            self.saveToLibrary(url)
+        }
+    }
+
+    private func saveToLibrary(_ url: URL) {
+        PHPhotoLibrary.shared().performChanges {
+            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+        } completionHandler: { _, err in
+            if let err { print("保存失败: \(err)") }
+        }
     }
 
     // MARK: - Frame processing
@@ -149,7 +249,6 @@ final class CameraManager: NSObject, ObservableObject {
 
         let snap = motionSnapshot()
 
-        // EMA 平滑
         smoothRoll  += rollAlpha  * (snap.roll    - smoothRoll)
         smoothOffX  += transAlpha * (snap.offsetX - smoothOffX)
         smoothOffY  += transAlpha * (snap.offsetY - smoothOffY)
@@ -157,7 +256,6 @@ final class CameraManager: NSObject, ObservableObject {
         let angle = CGFloat(-smoothRoll)
         let cx = w / 2; let cy = h / 2
 
-        // 绕中心反旋转
         let rotated = ci.transformed(by:
             CGAffineTransform(translationX: -cx, y: -cy)
                 .concatenating(CGAffineTransform(rotationAngle: angle))
@@ -167,38 +265,63 @@ final class CameraManager: NSObject, ObservableObject {
         let re = rotated.extent
         let shorter = min(w, h)
         let cropW = shorter * CGFloat(cropScale)
-        let cropH = cropW * CGFloat(1.0 / cropRatio)  // 宽 / (3/4) = 4:3 高
+        let cropH = cropW * CGFloat(1.0 / cropRatio)
 
         let marginX = max(0, (re.width  - cropW) / 2)
         let marginY = max(0, (re.height - cropH) / 2)
 
-        // 旋转坐标系下的平移
         let cosA = cos(angle); let sinA = sin(angle)
         let rOffX = CGFloat(smoothOffX) * cosA - CGFloat(smoothOffY) * sinA
         let rOffY = CGFloat(smoothOffX) * sinA + CGFloat(smoothOffY) * cosA
 
-        let shiftX = rOffX * marginX * 0.9
-        let shiftY = rOffY * marginY * 0.9
-
         let cropRect = CGRect(
-            x: re.midX - cropW / 2 + shiftX,
-            y: re.midY - cropH / 2 + shiftY,
-            width:  cropW,
-            height: cropH
+            x: re.midX - cropW / 2 + rOffX * marginX * 0.9,
+            y: re.midY - cropH / 2 + rOffY * marginY * 0.9,
+            width: cropW, height: cropH
         )
 
         let result = rotated
             .cropped(to: cropRect)
             .transformed(by: CGAffineTransform(translationX: -cropRect.minX, y: -cropRect.minY))
 
-        // 发送到预览
+        // 预览
         DispatchQueue.main.async { [weak self] in
             self?.previewFrame?(result)
         }
+
+        // 录制
+        writeFrame(result, pts: CMSampleBufferGetPresentationTimeStamp(buf))
+    }
+
+    private func writeFrame(_ image: CIImage, pts: CMTime) {
+        guard let w = writer, let input = writerInput, let adaptor = pixelAdaptor,
+              w.status == .writing, input.isReadyForMoreMediaData else { return }
+
+        if !sessionAtSourceTime {
+            w.startSession(atSourceTime: pts)
+            sessionAtSourceTime = true
+        }
+
+        let (outW, outH) = quality.outputSize
+        guard let pool = adaptor.pixelBufferPool else { return }
+        var outBuf: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outBuf) == kCVReturnSuccess,
+              let dest = outBuf else { return }
+
+        // 缩放到输出分辨率
+        let scaleX = CGFloat(outW) / image.extent.width
+        let scaleY = CGFloat(outH) / image.extent.height
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+
+        ciContext.render(scaled,
+                         to: dest,
+                         bounds: CGRect(x: 0, y: 0, width: outW, height: outH),
+                         colorSpace: CGColorSpaceCreateDeviceRGB())
+        adaptor.append(dest, withPresentationTime: pts)
     }
 }
 
-// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
+// MARK: - Delegate
 
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput,
