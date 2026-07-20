@@ -4,6 +4,8 @@ import Metal
 /// Metal compute 鱼眼矫正
 final class FisheyeCorrector {
 
+    var strength: Float = 2.0  // 矫正强度，1=标定值，越大越强
+
     private let ps: MTLComputePipelineState
     private let dev: MTLDevice
     private let queue: MTLCommandQueue
@@ -19,11 +21,17 @@ final class FisheyeCorrector {
         kernel void correct(texture2d<float, access::read> in [[texture(0)]],
                             texture2d<float, access::write> out [[texture(1)]],
                             constant float4& p [[buffer(0)]],
+                            constant float& strength [[buffer(1)]],
                             uint2 gid [[thread_position_in_grid]])
         {
             if (gid.x >= out.get_width() || gid.y >= out.get_height()) return;
             float fx = p.x, fy = p.y, cx = p.z, cy = p.w;
-            float k1 = -0.22327126, k2 = 0.04652081, k3 = 0.00112181, k4 = 0.00183698, k5 = -0.00408785;
+            float s2 = max(strength, 0.0);
+            float k1 = -0.22327126 * s2;
+            float k2 =  0.04652081 * s2;
+            float k3 =  0.00112181 * s2;
+            float k4 =  0.00183698 * s2;
+            float k5 = -0.00408785 * s2;
             float2 dp = float2(gid) + 0.5;
             float xn = (dp.x - cx) / fx;
             float yn = (dp.y - cy) / fy;
@@ -69,7 +77,9 @@ final class FisheyeCorrector {
 
         var p = SIMD4<Float>(932.7 * Float(w)/2160, 936.5 * Float(h)/3840,
                              1111.3 * Float(w)/2160, 1846.5 * Float(h)/3840)
+        var s = strength
         enc.setBytes(&p, length: 16, index: 0)
+        enc.setBytes(&s, length: 4, index: 1)
         enc.setComputePipelineState(ps)
 
         let tw = ps.threadExecutionWidth

@@ -21,10 +21,25 @@ struct ContentView: View {
                 // ── 底部控制 ──
                 VStack(spacing: 12) {
                     // 鱼眼矫正
-                    Toggle("鱼眼矫正", isOn: $camera.fisheyeOn)
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(.white)
+                    HStack {
+                        Toggle("鱼眼矫正", isOn: $camera.fisheyeOn)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 40)
+                    if camera.fisheyeOn {
+                        HStack {
+                            Text("强度")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.7))
+                            Slider(value: $camera.fisheyeStrength, in: 0.0...10.0, step: 0.1)
+                                .tint(.white)
+                            Text(String(format: "%.1f", camera.fisheyeStrength))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.white)
+                        }
                         .padding(.horizontal, 40)
+                    }
                     // 画质
                     Picker("画质", selection: $camera.quality) {
                         ForEach(RecordingQuality.allCases) { q in
