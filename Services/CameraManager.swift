@@ -66,8 +66,8 @@ final class CameraManager: NSObject, ObservableObject {
     // Fisheye
     private let fisheye = FisheyeCorrector()
     @Published var fisheyeOn = false
-    @Published var fisheyeStrength: Float = 2.0 {
-        didSet { fisheye?.strength = fisheyeStrength }
+    @Published var fisheyeStrength: Float = 3.0 {
+        didSet { fisheye.strength = fisheyeStrength }
     }
 
     // MARK: - Crop geometry
@@ -319,7 +319,7 @@ final class CameraManager: NSObject, ObservableObject {
 
         let raw = CIImage(cvPixelBuffer: pixelBuffer)
         let corrected: CIImage
-        if fisheyeOn, let c = fisheye?.correct(raw) { corrected = c }
+        if fisheyeOn, let c = fisheye.correct(raw) { corrected = c }
         else { corrected = raw }
         let ciImage = corrected.oriented(.right)
         let pW: CGFloat = ciImage.extent.width
