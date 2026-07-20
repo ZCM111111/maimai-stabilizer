@@ -65,6 +65,10 @@ final class CameraManager: NSObject, ObservableObject {
     private let cropScale: Double = 3.0 / 5.0 * 0.90
     private let cropRatio: Double = 3.0 / 4.0
 
+    // MARK: - Frame counter (dataQueue only)
+
+    private var frameIndex: Int = 0
+
     // MARK: - Recording (dataQueue only)
 
     private var writer: AVAssetWriter?
@@ -223,12 +227,12 @@ final class CameraManager: NSObject, ObservableObject {
         pixelAdaptor = adaptor
         recordingURL = url
         sessionAtSourceTime = false
-        isRecording = true
+        DispatchQueue.main.async { self.isRecording = true }
     }
 
     private func finishRecording() {
         guard let w = writer, isRecording else { return }
-        isRecording = false
+        DispatchQueue.main.async { self.isRecording = false }
         writer = nil
         writerInput = nil
         pixelAdaptor = nil
@@ -297,10 +301,14 @@ final class CameraManager: NSObject, ObservableObject {
             .cropped(to: cropRect)
             .transformed(by: CGAffineTransform(translationX: -cropRect.minX, y: -cropRect.minY))
 
-        // 预览（直接回调，不 dispatch 到 main — MTKView.enqueue 本身线程安全）
-        previewFrame?(result)
+        frameIndex += 1
 
-        // 录制
+        // 预览 30fps（隔帧发，减少 GPU 负载）
+        if frameIndex % 2 == 0 {
+            previewFrame?(result)
+        }
+
+        // 录制 60fps（每帧都写）
         writeFrame(result, pts: CMSampleBufferGetPresentationTimeStamp(buf))
     }
 
