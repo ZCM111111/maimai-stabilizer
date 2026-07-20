@@ -250,8 +250,9 @@ final class CameraManager: NSObject, ObservableObject {
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: vInput, sourcePixelBufferAttributes: adaptorAttrs)
 
-        guard writer.canAdd(vInput), writer.startWriting() else { return }
+        guard writer.canAdd(vInput) else { print("❌ cannot add input"); return }
         writer.add(vInput)
+        guard writer.startWriting() else { print("❌ startWriting failed:", writer.error as Any); return }
 
         assetWriter        = writer
         videoWriterInput   = vInput
