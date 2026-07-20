@@ -2,6 +2,8 @@ import CoreImage
 
 final class FisheyeCorrector {
 
+    let ready: Bool
+
     private let calibFx: Float = 932.7
     private let calibFy: Float = 936.5
     private let calibCx: Float = 1111.3
@@ -18,16 +20,23 @@ final class FisheyeCorrector {
     private let kernel: CIWarpKernel
 
     init?() {
-        let src = """
+        // 先用简单测试 kernel
+        let testSrc = """
         #include <CoreImage/CoreImage.h>
-        kernel vec2 fisheyeWarp(float fx, float fy, float cx, float cy,
-                                float k1, float k2, float k3, float k4, float k5)
+        kernel vec2 testShift() {
+            return destCoord() + float2(50.0, 50.0);
+        }
+        """
+        // 鱼眼矫正 kernel
+        let fisheyeSrc = """
+        #include <CoreImage/CoreImage.h>
+        kernel vec2 fisheye(float fx, float fy, float cx, float cy,
+                            float k1, float k2, float k3, float k4, float k5)
         {
             float2 p = destCoord();
             float xn = (p.x - cx) / fx;
             float yn = (p.y - cy) / fy;
             float r = sqrt(xn*xn + yn*yn);
-            float r0 = r;
             if (r < 0.001) return p;
             float theta = atan(r);
             float th2 = theta * theta;
@@ -36,14 +45,27 @@ final class FisheyeCorrector {
             return float2(fx*xn*s + cx, fy*yn*s + cy);
         }
         """
-        guard let k = CIWarpKernel(source: src) else {
-            print("⚠️ CIWarpKernel 编译失败")
+        if let k = CIWarpKernel(source: fisheyeSrc) {
+            self.kernel = k
+            self.ready = true
+            print("✓ Fisheye kernel loaded")
+        } else if let k = CIWarpKernel(source: testSrc) {
+            self.kernel = k
+            self.ready = false
+            print("⚠ Fisheye failed, using test shift kernel")
+        } else {
+            print("❌ All kernels failed")
             return nil
         }
-        self.kernel = k
     }
 
     func correct(_ image: CIImage) -> CIImage? {
+        guard ready else {
+            // 测试模式：偏移 50px 验证管线是否工作
+            return kernel.apply(extent: image.extent,
+                                roiCallback: { _, _ in image.extent },
+                                image: image, arguments: [])
+        }
         let w = Float(image.extent.width)
         let h = Float(image.extent.height)
         let sx = w / calibW
