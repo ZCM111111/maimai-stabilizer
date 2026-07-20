@@ -2,20 +2,10 @@ import CoreImage
 
 final class FisheyeCorrector {
 
-    private let kernel: CIColorKernel
+    private let kernel: CIKernel
 
     init?() {
-        // 测试：sampler + 偏移200px + 红调
-        let testSrc = """
-        kernel vec4 shiftTest(sampler src) {
-            float2 p = samplerCoord(src);
-            vec4 c = sample(src, p - float2(0.0, 200.0));
-            c.r = 1.0;
-            return c;
-        }
-        """
-        // 鱼眼
-        let fisheyeSrc = """
+        let src = """
         kernel vec4 fisheye(sampler src) {
             float2 p = samplerCoord(src);
             float2 siz = float2(src.size().x, src.size().y);
@@ -36,20 +26,17 @@ final class FisheyeCorrector {
             return sample(src, sp);
         }
         """
-        // 优先鱼眼，失败用测试
-        if let k = CIColorKernel(source: fisheyeSrc) {
-            self.kernel = k
-            print("✓ fisheye")
-        } else if let k = CIColorKernel(source: testSrc) {
-            self.kernel = k
-            print("⚠ idTest, fisheye failed")
-        } else {
-            print("❌ both failed")
+        guard let k = CIKernel(source: src) else {
+            print("❌ CIKernel fail")
             return nil
         }
+        self.kernel = k
+        print("✓ CIKernel ok")
     }
 
     func correct(_ image: CIImage) -> CIImage? {
-        return kernel.apply(extent: image.extent, arguments: [image])
+        return kernel.apply(extent: image.extent,
+                            roiCallback: { _, _ in image.extent },
+                            arguments: [image as Any])
     }
 }
