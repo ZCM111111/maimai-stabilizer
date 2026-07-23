@@ -372,7 +372,7 @@ final class CameraManager: NSObject, ObservableObject {
         let rotNormY = CGFloat(smoothedNormX) * sinA + CGFloat(smoothedNormY) * cosA
 
         // Pitch: 手机前倾→画面下移→裁切窗口上移 (CIImage Y+向上)
-        let pitchPx = CGFloat(tan(smoothedPitch)) * pH * 0.4
+        let pitchPx = CGFloat(-tan(smoothedPitch)) * pH * 0.4
 
         let shiftX = rotNormX * marginX * 0.9
         let shiftY = rotNormY * marginY * 0.9 + pitchPx
