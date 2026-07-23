@@ -69,9 +69,7 @@ final class CameraManager: NSObject, ObservableObject {
     // Fisheye
     private let fisheye = FisheyeCorrector()
     @Published var fisheyeOn = true
-    @Published var fisheyeStrength: Float = 0.8 {
-        didSet { fisheye.strength = fisheyeStrength }
-    }
+    nonisolated(unsafe) var anglesProvider: (() -> (roll: Double, pitch: Double, yaw: Double)?)? = nil
 
     // MARK: - Crop geometry
 
@@ -337,59 +335,45 @@ final class CameraManager: NSObject, ObservableObject {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         let raw = CIImage(cvPixelBuffer: pixelBuffer)
-        let corrected: CIImage
-        if fisheyeOn, let c = fisheye.correct(raw) { corrected = c }
-        else { corrected = raw }
-        let ciImage = corrected.oriented(.right)
-        let pW: CGFloat = ciImage.extent.width
-        let pH: CGFloat = ciImage.extent.height
+        let ciImage: CIImage
 
-        let snap = motionSnapshotProvider()
+        if fisheyeOn {
+            // 全景模式：Metal shader 处理三轴旋转+鱼眼矫正
+            if let a = anglesProvider?() {
+                fisheye?.roll = a.roll; fisheye?.pitch = a.pitch; fisheye?.yaw = a.yaw
+            }
+            ciImage = (fisheye?.correct(raw) ?? raw).oriented(.right)
+        } else {
+            // 普通模式：横滚锁定+裁切
+            let oriented = raw.oriented(.right)
+            let pW = oriented.extent.width, pH = oriented.extent.height
+            let snap = motionSnapshotProvider()
+            smoothedRoll  += rollSmoothingAlpha        * (snap.roll    - smoothedRoll)
+            smoothedNormX += translationSmoothingAlpha * (snap.offsetX - smoothedNormX)
+            smoothedNormY += translationSmoothingAlpha * (snap.offsetY - smoothedNormY)
+            let angle = CGFloat(-smoothedRoll)
+            let cx = pW/2, cy = pH/2
+            let rotated = oriented.transformed(by:
+                CGAffineTransform(translationX: -cx, y: -cy)
+                    .concatenating(CGAffineTransform(rotationAngle: angle))
+                    .concatenating(CGAffineTransform(translationX: cx, y: cy)))
+            let re = rotated.extent
+            let shorter = min(pW, pH)
+            let cw = shorter * CGFloat(cropFraction)
+            let ch = cw * CGFloat(cropAspectH / cropAspectW)
+            let mx = max(0, (re.width - cw) / 2)
+            let my = max(0, (re.height - ch) / 2)
+            let ca = cos(angle), sa = sin(angle)
+            let rx = CGFloat(smoothedNormX)*ca - CGFloat(smoothedNormY)*sa
+            let ry = CGFloat(smoothedNormX)*sa + CGFloat(smoothedNormY)*ca
+            let sx = max(-mx, min(mx, rx*mx*0.9))
+            let sy = max(-my, min(my, ry*my*0.9))
+            let cr = CGRect(x: re.midX - cw/2 + sx, y: re.midY - ch/2 + sy, width: cw, height: ch)
+            ciImage = rotated.cropped(to: cr)
+                .transformed(by: CGAffineTransform(translationX: -cr.minX, y: -cr.minY))
+        }
 
-        smoothedRoll  += rollSmoothingAlpha        * (snap.roll    - smoothedRoll)
-        smoothedPitch += rollSmoothingAlpha        * (snap.pitch   - smoothedPitch)
-        smoothedNormX += translationSmoothingAlpha * (snap.offsetX - smoothedNormX)
-        smoothedNormY += translationSmoothingAlpha * (snap.offsetY - smoothedNormY)
-
-        let angle: CGFloat = CGFloat(-smoothedRoll)
-        let cx = pW / 2;  let cy = pH / 2
-
-        let centreRotation = CGAffineTransform(translationX: -cx, y: -cy)
-            .concatenating(CGAffineTransform(rotationAngle: angle))
-            .concatenating(CGAffineTransform(translationX:  cx, y:  cy))
-        let rotated = ciImage.transformed(by: centreRotation)
-
-        let re = rotated.extent
-        let shorter: CGFloat = min(pW, pH)
-        let cropW: CGFloat   = shorter * CGFloat(cropFraction)
-        let cropH: CGFloat   = cropW   * CGFloat(cropAspectH / cropAspectW)
-
-        let marginX = max(0, (re.width  - cropW) / 2)
-        let marginY = max(0, (re.height - cropH) / 2)
-
-        let cosA = cos(angle);  let sinA = sin(angle)
-        let rotNormX = CGFloat(smoothedNormX) * cosA - CGFloat(smoothedNormY) * sinA
-        let rotNormY = CGFloat(smoothedNormX) * sinA + CGFloat(smoothedNormY) * cosA
-
-        // Pitch: 手机前倾→画面下移→裁切窗口上移 (CIImage Y+向上)
-        let pitchPx = CGFloat(-tan(smoothedPitch)) * pH * 0.4
-
-        let shiftX = rotNormX * marginX * 0.9
-        let shiftY = rotNormY * marginY * 0.9 + pitchPx
-
-        let cropRect = CGRect(
-            x: re.midX - cropW / 2 + shiftX,
-            y: re.midY - cropH / 2 + shiftY,
-            width:  cropW,
-            height: cropH
-        )
-
-        let cropped = rotated
-            .cropped(to: cropRect)
-            .transformed(by: CGAffineTransform(translationX: -cropRect.minX,
-                                               y:            -cropRect.minY))
-
-        previewFrameHandler?(cropped)
+        previewFrameHandler?(ciImage)
 
         guard isRecordingFlag,
               let writer  = assetWriter,

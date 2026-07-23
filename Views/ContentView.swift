@@ -20,20 +20,10 @@ struct ContentView: View {
 
                 // ── 设置区 ──
                 VStack(spacing: 8) {
-                    HStack(spacing: 12) {
-                        Toggle("鱼眼矫正", isOn: $camera.fisheyeOn)
-                            .font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(.white)
-                        if camera.fisheyeOn {
-                            Slider(value: $camera.fisheyeStrength, in: 0.0...10.0, step: 0.1)
-                                .tint(.white)
-                                .frame(width: 100)
-                            Text(String(format: "%.1f", camera.fisheyeStrength))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.white)
-                                .frame(width: 30)
-                        }
-                    }
+                    Toggle("三轴稳像", isOn: $camera.fisheyeOn)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 40)
                     Picker("画质", selection: $camera.quality) {
                         ForEach(RecordingQuality.allCases) { q in
                             Text(q.rawValue).tag(q)
@@ -108,6 +98,9 @@ struct ContentView: View {
         .onAppear {
             camera.motionSnapshotProvider = { [weak motion] in
                 motion?.snapshot() ?? (0, 0, 0, 0)
+            }
+            camera.anglesProvider = { [weak motion] in
+                motion?.angles()
             }
             camera.start()
             motion.start()
