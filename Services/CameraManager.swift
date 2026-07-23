@@ -393,9 +393,9 @@ final class CameraManager: NSObject, ObservableObject {
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outBuffer) == kCVReturnSuccess,
               let destBuffer = outBuffer else { return }
 
-        let renderW = Int(cropRect.width)  & ~1
-        let renderH = Int(cropRect.height) & ~1
-        ciContext.render(cropped,
+        let renderW = Int(ciImage.extent.width)  & ~1
+        let renderH = Int(ciImage.extent.height) & ~1
+        ciContext.render(ciImage,
                          to: destBuffer,
                          bounds: CGRect(x: 0, y: 0, width: renderW, height: renderH),
                          colorSpace: CGColorSpaceCreateDeviceRGB())
