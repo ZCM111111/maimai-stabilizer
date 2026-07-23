@@ -46,6 +46,7 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - Smoothing state (accessed only on dataOutputQueue)
 
     nonisolated(unsafe) private var smoothedRoll:  Double = 0.0
+    nonisolated(unsafe) private var smoothedPitch: Double = 0.0
     nonisolated(unsafe) private var smoothedNormX: Double = 0.0
     nonisolated(unsafe) private var smoothedNormY: Double = 0.0
 
@@ -59,7 +60,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Motion snapshot provider
 
-    nonisolated(unsafe) var motionSnapshotProvider: () -> (roll: Double, offsetX: Double, offsetY: Double) = { (0, 0, 0) }
+    nonisolated(unsafe) var motionSnapshotProvider: () -> (roll: Double, pitch: Double, offsetX: Double, offsetY: Double) = { (0, 0, 0, 0) }
 
     // MARK: - Preview frame handler
 
@@ -346,6 +347,7 @@ final class CameraManager: NSObject, ObservableObject {
         let snap = motionSnapshotProvider()
 
         smoothedRoll  += rollSmoothingAlpha        * (snap.roll    - smoothedRoll)
+        smoothedPitch += rollSmoothingAlpha        * (snap.pitch   - smoothedPitch)
         smoothedNormX += translationSmoothingAlpha * (snap.offsetX - smoothedNormX)
         smoothedNormY += translationSmoothingAlpha * (snap.offsetY - smoothedNormY)
 
@@ -369,8 +371,11 @@ final class CameraManager: NSObject, ObservableObject {
         let rotNormX = CGFloat(smoothedNormX) * cosA - CGFloat(smoothedNormY) * sinA
         let rotNormY = CGFloat(smoothedNormX) * sinA + CGFloat(smoothedNormY) * cosA
 
+        // Pitch: 手机前倾→画面下移→裁切窗口上移 (CIImage Y+向上)
+        let pitchPx = CGFloat(tan(smoothedPitch)) * pH * 0.4
+
         let shiftX = rotNormX * marginX * 0.9
-        let shiftY = rotNormY * marginY * 0.9
+        let shiftY = rotNormY * marginY * 0.9 + pitchPx
 
         let cropRect = CGRect(
             x: re.midX - cropW / 2 + shiftX,

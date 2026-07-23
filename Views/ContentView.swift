@@ -107,7 +107,7 @@ struct ContentView: View {
         }
         .onAppear {
             camera.motionSnapshotProvider = { [weak motion] in
-                motion?.snapshot() ?? (0, 0, 0)
+                motion?.snapshot() ?? (0, 0, 0, 0)
             }
             camera.start()
             motion.start()
