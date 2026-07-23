@@ -36,6 +36,7 @@ final class MotionManager: ObservableObject {
             if pd >  .pi { pd -= 2 * .pi }; if pd < -.pi { pd += 2 * .pi }
             self.prevPitch = rawP
             if abs(pd) > 0.005 { self.pitchAcc += pd }
+            self.pitchAcc *= 0.995  // 缓慢衰减回中
 
             self.lock.lock()
             self._roll = self.rollAcc
