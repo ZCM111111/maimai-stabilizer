@@ -10,6 +10,10 @@ final class MotionManager: ObservableObject {
         lock.lock(); defer { lock.unlock() }
         return (_roll, _pitch, 0, 0)
     }
+    func angles() -> (roll: Double, pitch: Double, yaw: Double) {
+        lock.lock(); defer { lock.unlock() }
+        return (_roll, _pitch, 0)
+    }
 
     private let motion = CMMotionManager()
     private let queue = OperationQueue()
