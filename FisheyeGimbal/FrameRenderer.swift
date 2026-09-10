@@ -3,7 +3,7 @@
 //  FisheyeGimbal
 //
 //  Metal 渲染管线（双段）：
-//      CVPixelBuffer(BGRA) --[blit]--> srcTex
+//      CVPixelBuffer(BGRA) --[CVMetalTextureCache 零拷贝]--> srcTex
 //              --[compute FEConvertKernel]--> dstTex(RGBA)
 //              --[fragment FEStabilizeFragment]--> drawable
 //
@@ -110,10 +110,13 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     // MARK: - 槽位
 
     private final class Slot {
-        let src: MTLTexture
+        /// 转换结果：RGBA，给 fragment shader 采样
         let dst: MTLTexture
+        /// 本槽当前占用的 CVPixelBuffer 包装。必须持有到 GPU 用完为止，
+        /// 否则 buffer 被回收后纹理内容失效。
+        var srcWrapper: CVMetalTexture?
         var inFlight = false
-        init(src: MTLTexture, dst: MTLTexture) { self.src = src; self.dst = dst }
+        init(dst: MTLTexture) { self.dst = dst }
     }
 
     private var slots: [Slot] = []
@@ -122,6 +125,10 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     private var textureSize: CGSize = .zero
     private let lock = NSLock()
     private let slotCount = 6
+
+    /// CVPixelBuffer -> MTLTexture 的零拷贝缓存。
+    /// 比 blit 拷贝快，而且不用维护源纹理池。
+    private var textureCache: CVMetalTextureCache?
 
     // MARK: - uniform & 统计
 
@@ -183,6 +190,17 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
             self.lock.lock(); self.applyParamsLocked(); self.lock.unlock()
         }
         applyParamsLocked()
+
+        // CVPixelBuffer -> MTLTexture 的零拷贝缓存
+        var cache: CVMetalTextureCache?
+        let cacheStatus = CVMetalTextureCacheCreate(kCFAllocatorDefault,
+                                                    nil,
+                                                    device,
+                                                    nil,
+                                                    &cache)
+        if cacheStatus == kCVReturnSuccess {
+            self.textureCache = cache
+        }
 
         // 布局自检：只对 offset(of:) 断言，不去猜结构体总大小算法。
         // 这些必须和 Shaders.metal 的 [[id(n)]] 一一对应。
@@ -256,7 +274,7 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         uniforms.screenUp = params.screenUp
     }
 
-    /// 源帧分辨率变化时重建纹理池
+    /// 源帧分辨率变化时重建输出纹理池
     private func rebuildLocked(size: CGSize) {
         slots.removeAll()
         latestIndex = -1
@@ -265,9 +283,8 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         let w = max(Int(size.width), 16)
         let h = max(Int(size.height), 16)
         for _ in 0..<slotCount {
-            guard let src = makeTexture(w, h, .bgra8Unorm),
-                  let dst = makeTexture(w, h, .rgba8Unorm) else { continue }
-            slots.append(Slot(src: src, dst: dst))
+            guard let dst = makeTexture(w, h, .rgba8Unorm) else { continue }
+            slots.append(Slot(dst: dst))
         }
         DispatchQueue.main.async { self.sourceSize = size }
         applyParamsLocked()
@@ -279,6 +296,28 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         d.usage = [.shaderRead, .shaderWrite]
         d.storageMode = .private
         return device.makeTexture(descriptor: d)
+    }
+
+    /// 零拷贝：把 BGRA 的 CVPixelBuffer 包成 Metal 纹理。
+    /// 调用方必须把返回的 CVMetalTexture 一直持有到 GPU 用完。
+    private func makeTexture(from pixelBuffer: CVPixelBuffer,
+                             width: Int, height: Int) -> (MTLTexture, CVMetalTexture)? {
+        guard let cache = textureCache else { return nil }
+        var cvTex: CVMetalTexture?
+        let status = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault,
+            cache,
+            pixelBuffer,
+            nil,
+            .bgra8Unorm,
+            width,
+            height,
+            0,
+            &cvTex)
+        guard status == kCVReturnSuccess,
+              let cvTex,
+              let mtl = CVMetalTextureGetTexture(cvTex) else { return nil }
+        return (mtl, cvTex)
     }
 
     // MARK: - 摄像头帧入口（在 AVCapture 的视频队列上调用）
@@ -311,23 +350,26 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         slot.inFlight = true
         lock.unlock()
 
-        guard let cmd = queue.makeCommandBuffer() else {
+        // 零拷贝拿到 BGRA 源纹理。
+        // 之前这里用 blit.copy(from: pixelBuffer, to: src) 是错的 ——
+        // 那个重载两边都要 MTLTexture，塞 CVPixelBuffer 编不过。
+        guard let (srcTex, wrapper) = makeTexture(from: pixelBuffer, width: w, height: h) else {
             lock.lock(); slot.inFlight = false; lock.unlock()
             return
         }
+        lock.lock()
+        slot.srcWrapper = wrapper
+        lock.unlock()
 
-        // 把 CVPixelBuffer 拷进私有纹理。
-        // 注意：必须用 copy(from: CVPixelBuffer, to: MTLTexture) 这个重载，
-        // 不能塞 sourceBytesPerRow / sourceSize 那套参数 —— 那是给 MTLBuffer 源用的。
-        if let blit = cmd.makeBlitCommandEncoder() {
-            blit.copy(from: pixelBuffer, to: slot.src)
-            blit.endEncoding()
+        guard let cmd = queue.makeCommandBuffer() else {
+            lock.lock(); slot.inFlight = false; slot.srcWrapper = nil; lock.unlock()
+            return
         }
 
         if let enc = cmd.makeComputeCommandEncoder() {
             enc.label = "FEConvert"
             enc.setComputePipelineState(convertPSO)
-            enc.setTexture(slot.src, index: 0)
+            enc.setTexture(srcTex, index: 0)
             enc.setTexture(slot.dst, index: 1)
             enc.dispatchThreadgroups(
                 MTLSize(width: (w + 15) / 16, height: (h + 15) / 16, depth: 1),
@@ -337,8 +379,10 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
 
         cmd.addCompletedHandler { [weak self] _ in
             guard let self else { return }
+            // 必须等 GPU 用完才能放掉 buffer 包装
             self.lock.lock()
             slot.inFlight = false
+            slot.srcWrapper = nil
             self.lock.unlock()
         }
         cmd.commit()

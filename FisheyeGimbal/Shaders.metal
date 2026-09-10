@@ -69,15 +69,6 @@ static inline float feRadiusFromTheta(float theta, float f, float model) {
     return (model < 0.5f) ? (f * theta) : (2.0f * f * sin(theta * 0.5f));
 }
 
-// 反向：像高 -> 半视场角
-static inline float feThetaFromRadius(float r, float f, float model) {
-    float x = r / max(f, 1e-6f);
-    if (model < 0.5f) {
-        return x;
-    }
-    return 2.0f * asin(clamp(x * 0.5f, 0.0f, 1.0f));
-}
-
 // 径向修正：把实测畸变曲线拉回理想模型
 static inline float feCorrectRadius(float r, float k1, float k2) {
     float x = r * r;
