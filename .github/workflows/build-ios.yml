@@ -35,7 +35,6 @@ jobs:
 
       - name: 编译（不签名，产 .app）
         id: build
-        # 关键：不用 pipefail，失败也要继续，好让下一个步骤打日志
         run: |
           xcodebuild \
             -project FisheyeGimbal.xcodeproj \
@@ -54,8 +53,18 @@ jobs:
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             MARKETING_VERSION=${{ steps.xc.outputs.version }} \
             clean build > xcodebuild.log 2>&1
-          echo "RC=$?" >> $GITHUB_OUTPUT
-          tail -5 xcodebuild.log
+          RC=$?
+          echo "xcodebuild 退出码 = $RC"
+          echo "=========================== BUILD 结果标记 ==========================="
+          grep -nE "^\*\* BUILD|Testing failed|The following build commands failed" xcodebuild.log | tail -20 || echo "(无)"
+          echo "=========================== error: 行 ==========================="
+          grep -nE "error:|error :|fatal error:" xcodebuild.log | head -80 || echo "(无 error: 行)"
+          echo "=========================== 项目 / scheme 问题 ==========================="
+          grep -niE "cannot be opened|damaged|unsupported|does not contain a scheme|not found|missing the following|is not a valid|requires a provisioning" xcodebuild.log | head -40 || echo "(无)"
+          echo "=========================== 尾部 50 行 ==========================="
+          tail -50 xcodebuild.log
+          echo "RC=$RC" >> $GITHUB_OUTPUT
+          exit $RC
 
       # ---- 诊断步骤：无条件执行，把编译问题直接打到这里 ----
       - name: 诊断 xcodebuild.log
