@@ -171,6 +171,16 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
     // 3 = 采样算出的 UV 坐标着色（红=u 绿=v，验证去畸变算出的坐标范围）
     // 4 = 只画中心 60px 圆点  （验证原始像素到屏幕的通路）
     uint mode = feMode(u);
+    if (mode == 6u) {
+        // 验证进入 fragment 的那个纹理到底是哪个。
+        // 如果这个有画面 -> mode 0 黑的锅不在纹理绑定
+        // 如果这个也黑    -> 采样的根本不是转换后的目标纹理（索引/绑定错了）
+        float2 uv2 = float2((in.uv.x + 1.0f) * 0.5f, (1.0f - in.uv.y) * 0.5f);
+        float4 c = srcTex.sample(samp, uv2);
+        // 左上角叠一块青色标记，用来确认这个分支确实在跑
+        if (in.uv.x < -0.8f && in.uv.y > 0.8f) { return float4(0.0f, 1.0f, 1.0f, 1.0f); }
+        return float4(c.rgb, 1.0f);
+    }
     if (mode == 5u) {
         // 把 rawRotation 的数值直接画出来：offset +0.5，所以中灰(0.5)代表 0
         // 画面分三横条：上=第0列(纹理+u轴) 中=第1列 下=第2列
