@@ -5,57 +5,65 @@ iPhone 外接鱼眼镜头 → 实时去畸变 + 三轴增稳，做成「纯 IMU 
 手机随便晃，画面始终看向同一个世界方向 —— 效果对标 DJI Pocket 3 的云台锁定模式，
 但不靠电机，全靠陀螺仪 + GPU 逐像素重投影。
 
+镜头夹在 **0.5x 超广角**上。
+
 ---
 
-## 0. 没有 Mac 怎么编译 + 装到手机
+## 0. 没有 Mac、没有开发者证书，怎么编译
 
-iOS 编译**必须** macOS + Xcode，这一步绕不过去。但整套流程可以做到：
+iOS 编译**必须** macOS + Xcode toolchain，这一步绕不过去。但可以完全在线完成：
 
 ```
-Windows 写代码 ──► GitHub Actions 的 macOS runner 编译出未签名 .ipa ──► Windows 上签名装手机
+Windows 写代码 ──push──► 云端 macOS runner 编译出「未签名 ipa」──► Windows 上自己签名装手机
 ```
 
-### ① 推到 GitHub（公开仓库）
+**没有开发者证书不影响编译**，只影响最后装到手机上那一步。
 
-```powershell
-cd C:\Users\93543\Desktop\FisheyeGimbal
-git init
-git add .
-git commit -m "fisheye gimbal"
-git branch -M main
-git remote add origin https://github.com/<你的用户名>/FisheyeGimbal.git
-git push -u origin main
-```
+### 路线 A：Codemagic（推荐，日志能直接看）
 
-推上去 Actions 自动跑（`.github/workflows/build-ios.yml`）。
-仓库页面 → Actions → 最新那次 run → 底部 Artifacts → 下载 `FisheyeGimbal-unsigned-ipa`。
+1. 打开 https://codemagic.io ，用 GitHub 登录
+2. `Add application` → 选 `ZCM111111/maimai-stabilizer`
+3. 构建类型选 `iOS App Store`（或 `Other`），Codemagic 自动读仓库里的 `codemagic.yaml`
+4. **什么都不用配** —— 不需要证书、不需要 Apple ID、不需要 App Store Connect Key
+5. `Start new build` → 进去看实时完整日志
+6. 构建完在 Artifacts 下载 `FisheyeGimbal-unsigned.ipa`
 
-> **为什么一定要公开仓库**：GitHub macOS runner 是 **10 倍计费倍率**，
+> ⚠️ 免费额度（500 min/月）**主要覆盖 Linux 机器**，而 iOS 构建必须用 macOS 机器。
+> 如果网页提示需要付费/试用，说明 macOS 分钟不在免费额度内 —— 直接走路线 B。
+
+### 路线 B：GitHub Actions（公开仓库免费）
+
+推送后自动跑 `.github/workflows/build-ios.yml`。
+
+> **为什么必须用公开仓库**：GitHub macOS runner 是 **10 倍计费倍率**，
 > 私有仓库免费额度 2000 min/月 → 实际只有 200 min macOS。
-> 公开仓库的 Actions 完全免费，随便跑。
+> 公开仓库的 Actions 完全免费。
 
-### ② Windows 上签名装进 iPhone
+仓库 → `Actions` → 最新一次 run → 底部 `Artifacts` → 下载 ipa。
 
-```powershell
-cd C:\Users\93543\Desktop\FisheyeGimbal
-.\sign-and-install.ps1 -Ipa .\FisheyeGimbal-unsigned.ipa
+---
+
+## 0.1 拿到未签名 ipa 之后怎么装到手机
+
+未签名 ipa **不能直接安装**，必须先签名。三条路：
+
+| 方式 | 成本 | 有效期 | 说明 |
+|---|---|---|---|
+| **Sideloadly**（Windows 上跑） | 免费 | 7 天 | 填 Apple ID 自动签名装机，到期重跑 |
+| **AltStore / AltServer** | 免费 | 7 天 | 装完 AltStore 后手机上自己续签，比 Sideloadly 省事 |
+| **Apple 开发者账号** | $99/年 | 1 年 | 拿到正式证书后不用反复重签 |
+
+Windows 上 Sideloadly 流程：
+
+```
+装 Sideloadly -> USB 连 iPhone -> 拖入 FisheyeGimbal-unsigned.ipa
+-> 填 Apple ID -> Start -> 手机设置里信任开发者证书
 ```
 
-或者手动走 AltStore 流程（脚本里注释写得很细）：
+同一仓库里还带了 `sign-and-install.ps1`（走 AltServer 自动装机）。
 
-1. 装 [AltServer for Windows](https://altstore.io) + **官方版** iTunes、iCloud（商店版不行）
-2. USB 连 iPhone，信任电脑
-3. iPhone 上：`设置 → 隐私与安全性 → 开发者模式` 打开 → 重启
-4. 托盘 AltServer 右键 → Install AltStore → 选设备 → 登录 Apple ID
-5. 之后用 AltStore 装 `FisheyeGimbal-unsigned.ipa`
-
-**免费 Apple ID 的证书只有 7 天**，到期重跑一次脚本。$99/年的开发者账号是 1 年。
-
-### ③ 想更省事：Codemagic / Bitrise
-
-[Codemagic](https://codemagic.io) 和 [Bitrise](https://bitrise.io) 有免费额度，
-而且**能直接帮你签名并推送到 TestFlight**，不用本地折腾 AltStore。
-要走这条路需要 $99 开发者账号 + App Store Connect API Key。
+**首次安装前必须做**：iPhone → `设置 → 隐私与安全性 → 开发者模式` → 打开 → 重启手机。
+不开这个，装完点图标会闪退。
 
 ---
 
@@ -167,19 +175,30 @@ axisW = R_comp · (0,0,1)     纹理 -(u×v)，即光轴朝外
 
 **调好了记下来**，换个镜头/重装一次可能就得重调。
 
+### 关于 0.5x 超广角的两个坑
+
+夹在 0.5x 上视野极大，但要盯两件事：
+
+1. **成像圈可能小于传感器**。0.5x 本身已经 120° 了，再叠鱼眼，
+   组合视场可能超过 260°，导致成像圈缩在画面中间、四周一圈黑。
+   表现：中间是个圆，圆外全黑且转不动。
+   → 处理：把「镜头半视场角」调小、或点【回中】后只用小幅晃动。
+2. **低光下画质偏软**。0.5x 传感器和单像素面积都比 1x 小得多，
+   掰直后要放大插值，会比 1x 更肉、噪点更多。
+   如果画质不能接受，就改夹在 1x 上（高级面板里「夹在哪个镜头」切换），重新标定。
+
 ---
 
 ## 4. 期望效果与限制
 
 **能做到：**
-- 鱼眼畸变实时矫正，直线变直（残差取决于标定精度，好的话肉眼基本看不出）
+- 鱼眼畸变实时矫正，直线变直（残差取决于标定精度）
 - 三轴（偏航/俯仰/横滚）全部补偿。横滚也会被纠平 —— 手机歪着，地平线依然是平的
 - 1080p60 在 A12 及以上流畅（iPhone XS/XR 之后全系）
 
 **做不到 / 会看到的：**
 - **黑边**：手机转太快或转太大角度时，需要的视场超出镜头能提供的范围 → 黑边。
-  这是物理限制。镜头 FOV 235°，扣掉输出画面的 75°，理论可转动余量大约 ±40~80°
-  取决于成像圈大小。想更抗晃 → 把「输出视场角」调小（画面放大）。
+  这是物理限制。想更抗晃 → 把「输出视场角」调小（画面放大），换取转动余量。
 - **缓慢漂移**：见 §1.2，纯 IMU 无解。
 - **果冻效应**：CMOS 是逐行曝光的，快速横摇时会有轻微斜切。
   真云台靠机械隔离，纯软件补偿不了这个。
@@ -187,10 +206,8 @@ axisW = R_comp · (0,0,1)     纹理 -(u×v)，即光轴朝外
   把 Metal 输出回灌到 pixel buffer（需要 `framebufferOnly = false`）。
 
 **想要更好可以继续做：**
-- 用 `AVCapturePhotoOutput` 拿相机内参矩阵 `intrinsics`，直接得到真实焦距，不用拧
-- 加棋盘格/直线检测做**自动标定**：拿 Vision 或 OpenCV 拟合直线，最小二乘解 k1/k2
-- 光学防抖 `preferredVideoStabilizationMode` 保留 `.standard` 兜底高频抖动
-  （但会引入裁剪，且和我们自己的补偿叠加，需要实测）
+- 用 `AVCaptureDevice.Format.formatDescription` 里的畸变元数据拿实测参数
+- 加棋盘格/直线检测做**自动标定**：用 Vision 或 OpenCV 拟合直线，最小二乘解 k1/k2
 - 补录像、补陀螺仪时间戳与帧时间戳的插值对齐（现在直接取最新姿态，
   高速晃动时会有 1 帧级的时间错位）
 
@@ -213,20 +230,24 @@ FisheyeGimbal/
 │   ├── FrameRenderer.swift            Metal 管线 + 环形纹理池 + uniform 打包
 │   ├── Shaders.metal                  核心 kernel：去畸变 + 增稳
 │   └── Info.plist
-├── .github/workflows/build-ios.yml    免 Mac 编译
-├── sign-and-install.ps1               Windows 签名装机
+├── .github/workflows/build-ios.yml    GitHub Actions 免 Mac 编译
+├── codemagic.yaml                     Codemagic 免 Mac 编译（日志可在网页看）
+├── sign-and-install.ps1               Windows 签名装机（走 AltServer）
 └── README.md
 ```
+
+---
 
 ## 6. 真机跑起来之后
 
 1. 第一次启动会要摄像头和运动权限，都给。
 2. 顶部胶囊里 `imu ok` 才说明陀螺仪在工作。显示 `imu －` 就是没数据，
    云台功能不会生效（画面还是去畸变的，但不会锁向）。
-3. `cam xx fps / render xx fps` 是实时帧率。低于 30 就去高级里降到 30fps，
-   或者换 1080p 而不是 4K 格式。
+3. `cam xx fps / render xx fps` 是实时帧率。低于 30 就去高级里降到 30fps。
 4. 点【回中】把当前朝向设成锁定方向。之后手机随便晃，画面都朝着这个方向。
 5. 先按 §3 把镜头标定好，再测增稳 —— 标定没做好，晃起来你会以为增稳也坏了。
+
+---
 
 ## 7. 出问题了按这个顺序查
 
@@ -234,12 +255,15 @@ FisheyeGimbal/
 |---|---|---|
 | 画面全黑，`cam 0 fps` | 摄像头权限 / 会话没起来 | 看 `camera.lastError` 那条红条 |
 | 画面是雪花/错位彩条 | Uniform 布局和 shader 错位 | 检查 `FrameRenderer.init` 里的 assert 有没有炸 |
-| `Metal 初始化失败` | shader 编译失败或设备不支持 | 看 Xcode 编译日志里 `Shaders.metal` 的报错 |
-| 画面跟着手机一起晃 | IMU 没数据 | 顶部应该显示 `imu ok`；否则检查运动权限 |
+| `Metal 初始化失败` | shader 编译失败或设备不支持 Metal | 看编译日志里 `Shaders.metal` 的报错 |
+| 画面跟着手机一起晃 | IMU 没数据 | 顶部应显示 `imu ok`；否则检查运动权限 |
 | 画面锁死但缓慢漂移 | 陀螺仪零偏，物理极限 | 见 §1.2，点【回中】 |
 | 边缘一圈黑 | 输出视场角太大，超出成像圈 | 调小「输出视场角」或调大「镜头半视场角」 |
 | 直线中间鼓/凹 | 畸变模型或 k1 不对 | 回 §3 第 4 步 |
 | 晃快了出现黑色扇形 | 需要的视场超出镜头范围 | 物理限制。调小输出视场角 |
+| 装完点图标闪退 | 没开开发者模式 / 证书没信任 | 见 §0.1 |
+
+---
 
 ## 8. 代码里埋的几个坑（已处理，别改回去）
 
@@ -254,7 +278,13 @@ FisheyeGimbal/
 4. **必须用 `AVCaptureSession.Preset.high`**，不要 `.photo` / HDR 预设，
    否则会触发多帧合成，帧率崩、延迟抖。
 5. **四元数低通，不是欧拉角低通**。理由见 §1.2。
-6. **纹理池 5 槽 + in-flight 标记**。帧率高于处理能力时直接丢帧，
+6. **纹理池环形 + in-flight 标记**。帧率高于处理能力时直接丢帧，
    绝不阻塞摄像头线程（阻塞 = 整条管线延迟越堆越大 = 手感变泥）。
+   显示用纹理也要占住槽位直到显示 command buffer 结束，否则会撕裂。
 7. **`q` 和 `−q` 是同一个旋转**。所有算角度差的地方都不能直接减分量，
    代码里用姿态矩阵的轴向量投影到水平面算 yaw，绕开双覆盖问题。
+8. **`CVPixelBuffer` 拷贝到纹理必须用 `copy(from:to:)` 那个重载**。
+   带 `sourceBytesPerRow` 参数的版本是给 `MTLBuffer` 源用的，塞 pixel buffer 会编译不过。
+9. **部署目标是 iOS 16**，所以 `.onChange` 用单参闭包版本；
+   两个参数的 `onChange(of:initial:_:)` 是 iOS 17 API。
+   超广角设备类型是 `.builtInUltraWideCamera`（不是 `...UltraWideAngleCamera`）。
