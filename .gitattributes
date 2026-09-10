@@ -1,0 +1,16 @@
+# Xcode 工程文件必须是 LF。CRLF 会让 xcodebuild 解析 pbxproj 出错。
+*.pbxproj  text eol=lf
+*.xcscheme text eol=lf
+*.plist    text eol=lf
+*.metal    text eol=lf
+*.swift    text eol=lf
+*.yml      text eol=lf
+*.md       text eol=lf
+
+# Windows 脚本保持 CRLF，方便直接右键运行
+*.ps1      text eol=crlf
+
+# 二进制不碰
+*.ipa      binary
+*.png      binary
+*.jpg      binary

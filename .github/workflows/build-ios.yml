@@ -1,0 +1,77 @@
+name: build-ios
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # macos-14 = Apple Silicon runner，装的是 Xcode 15.x
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境信息
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
+          sw_vers
+
+      - name: 解析 Xcode 版本号
+        id: xc
+        run: |
+          V=$(xcodebuild -version | head -1 | awk '{print $2}')
+          echo "version=$V" >> $GITHUB_OUTPUT
+          echo "Xcode = $V"
+
+      - name: 编译（不签名，产 .app）
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project FisheyeGimbal.xcodeproj \
+            -scheme FisheyeGimbal \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            IPHONEOS_DEPLOYMENT_TARGET=16.0 \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            MARKETING_VERSION=${{ steps.xc.outputs.version }} \
+            clean build | tee xcodebuild.log | tail -80
+
+      - name: 打包成 Payload/FisheyeGimbal.ipa
+        run: |
+          set -e
+          APP=$(find build/Build/Products -name "FisheyeGimbal.app" -maxdepth 4 | head -1)
+          echo "APP = $APP"
+          test -n "$APP" || { echo "找不到 .app"; exit 1; }
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          cd out && zip -qr FisheyeGimbal-unsigned.ipa Payload
+          ls -lh FisheyeGimbal-unsigned.ipa
+          shasum -a 256 FisheyeGimbal-unsigned.ipa
+
+      - name: 上传 ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: FisheyeGimbal-unsigned-ipa
+          path: out/FisheyeGimbal-unsigned.ipa
+          if-no-files-found: error
+
+      - name: 上传完整编译日志（失败时排查用）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+          if-no-files-found: ignore

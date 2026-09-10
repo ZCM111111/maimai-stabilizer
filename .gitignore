@@ -1,0 +1,14 @@
+# macOS
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.dSYM.zip
+
+# 编译日志
+xcodebuild.log
+
+# Windows
+Thumbs.db
+desktop.ini

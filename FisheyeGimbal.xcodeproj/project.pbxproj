@@ -1,0 +1,282 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 54;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		BB00000000000000000001 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000001 /* App.swift */; };
+		BB00000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000002 /* ContentView.swift */; };
+		BB00000000000000000003 /* CameraCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000003 /* CameraCapture.swift */; };
+		BB00000000000000000004 /* MotionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000004 /* MotionTracker.swift */; };
+		BB00000000000000000005 /* DistortionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000005 /* DistortionModel.swift */; };
+		BB00000000000000000006 /* FrameRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000006 /* FrameRenderer.swift */; };
+		BB00000000000000000008 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000008 /* Shaders.metal */; };
+		BB00000000000000000009 /* TunableParams.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000B /* TunableParams.swift */; };
+		BB0000000000000000000A /* InterfaceOrientationTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000C /* InterfaceOrientationTracker.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AA00000000000000000001 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+		AA00000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		AA00000000000000000003 /* CameraCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCapture.swift; sourceTree = "<group>"; };
+		AA00000000000000000004 /* MotionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionTracker.swift; sourceTree = "<group>"; };
+		AA00000000000000000005 /* DistortionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DistortionModel.swift; sourceTree = "<group>"; };
+		AA00000000000000000006 /* FrameRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameRenderer.swift; sourceTree = "<group>"; };
+		AA00000000000000000008 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
+		AA00000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA0000000000000000000A /* FisheyeGimbal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FisheyeGimbal.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000B /* TunableParams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunableParams.swift; sourceTree = "<group>"; };
+		AA0000000000000000000C /* InterfaceOrientationTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfaceOrientationTracker.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		DD00000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		CC00000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				CC00000000000000000002 /* FisheyeGimbal */,
+				CC00000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CC00000000000000000002 /* FisheyeGimbal */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000000000000000001 /* App.swift */,
+				AA00000000000000000002 /* ContentView.swift */,
+				AA00000000000000000003 /* CameraCapture.swift */,
+				AA00000000000000000004 /* MotionTracker.swift */,
+				AA00000000000000000005 /* DistortionModel.swift */,
+				AA00000000000000000006 /* FrameRenderer.swift */,
+				AA0000000000000000000B /* TunableParams.swift */,
+				AA0000000000000000000C /* InterfaceOrientationTracker.swift */,
+				AA00000000000000000008 /* Shaders.metal */,
+				AA00000000000000000009 /* Info.plist */,
+			);
+			path = FisheyeGimbal;
+			sourceTree = "<group>";
+		};
+		CC00000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000A /* FisheyeGimbal.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		EE00000000000000000001 /* FisheyeGimbal */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FF00000000000000000002 /* Build configuration list for PBXNativeTarget "FisheyeGimbal" */;
+			buildPhases = (
+				DD00000000000000000001 /* Sources */,
+				DD00000000000000000002 /* Frameworks */,
+				DD00000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FisheyeGimbal;
+			productName = FisheyeGimbal;
+			productReference = AA0000000000000000000A /* FisheyeGimbal.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		EE00000000000000000002 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					EE00000000000000000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = FF00000000000000000001 /* Build configuration list for PBXProject "FisheyeGimbal" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = CC00000000000000000001;
+			productRefGroup = CC00000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EE00000000000000000001 /* FisheyeGimbal */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		DD00000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		DD00000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB00000000000000000001 /* App.swift in Sources */,
+				BB00000000000000000002 /* ContentView.swift in Sources */,
+				BB00000000000000000003 /* CameraCapture.swift in Sources */,
+				BB00000000000000000004 /* MotionTracker.swift in Sources */,
+				BB00000000000000000005 /* DistortionModel.swift in Sources */,
+				BB00000000000000000006 /* FrameRenderer.swift in Sources */,
+				BB00000000000000000009 /* TunableParams.swift in Sources */,
+				BB0000000000000000000A /* InterfaceOrientationTracker.swift in Sources */,
+				BB00000000000000000008 /* Shaders.metal in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		GG00000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		GG00000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		GG00000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FisheyeGimbal/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seagull.fisheyegimbal;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		GG00000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FisheyeGimbal/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seagull.fisheyegimbal;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		FF00000000000000000001 /* Build configuration list for PBXProject "FisheyeGimbal" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				GG00000000000000000001 /* Debug */,
+				GG00000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FF00000000000000000002 /* Build configuration list for PBXNativeTarget "FisheyeGimbal" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				GG00000000000000000003 /* Debug */,
+				GG00000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = EE00000000000000000002 /* Project object */;
+}
