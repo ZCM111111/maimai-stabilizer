@@ -24,7 +24,9 @@ final class RemoteLog: ObservableObject {
     @Published private(set) var sentLines = 0
     @Published private(set) var lastError: String?
 
-    private var socket: Int32 = -1
+    /// 注意：不能叫 socket —— 那会遮蔽 Darwin 的全局函数 socket()，
+    /// 编译器会报 "use of 'socket' refers to instance method rather than global function"
+    private var socketFD: Int32 = -1
     private var queue = DispatchQueue(label: "fe.remotelog", qos: .utility)
     private let lock = NSLock()
 
@@ -44,19 +46,21 @@ final class RemoteLog: ObservableObject {
     static func localWiFiAddress() -> String? {
         var address: String?
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
-        defer { freeifaddrs(ifaddr) }
+        guard Darwin.getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { Darwin.freeifaddrs(ifaddr) }
         var ptr = first
         while true {
             let iface = ptr.pointee
-            let family = iface.ifa_addr.pointee.sa_family
+            guard let ifaAddr = iface.ifa_addr else { break }
+            let family = ifaAddr.pointee.sa_family
             if family == UInt8(AF_INET) {
                 let name = String(cString: iface.ifa_name)
                 // en0 = WiFi
                 if name == "en0" {
                     var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                    getnameinfo(iface.ifa_addr, socklen_t(iface.ifa_addr.pointee.sa_len),
-                                &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+                    Darwin.getnameinfo(ifaAddr, socklen_t(ifaAddr.pointee.sa_len),
+                                       &hostname, socklen_t(hostname.count),
+                                       nil, 0, NI_NUMERICHOST)
                     let s = String(cString: hostname)
                     if !s.isEmpty { address = s }
                 }
@@ -82,19 +86,19 @@ final class RemoteLog: ObservableObject {
         queue.async { [weak self] in
             guard let self else { return }
             self.closeSocket()
-            let fd = socket(AF_INET, SOCK_DGRAM, 0)
+            let fd = Darwin.socket(AF_INET, SOCK_DGRAM, 0)
             guard fd >= 0 else {
                 DispatchQueue.main.async {
-                    self.lastError = "socket() 失败 errno=\(errno)"
+                    self.lastError = "socket() 失败 errno=\(Darwin.errno)"
                     self.enabled = false
                 }
                 return
             }
             // 广播许可，方便试 255.255.255.255
             var on: Int32 = 1
-            setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, socklen_t(MemoryLayout<Int32>.size))
+            Darwin.setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, socklen_t(MemoryLayout<Int32>.size))
             self.lock.lock()
-            self.socket = fd
+            self.socketFD = fd
             self.lock.unlock()
             DispatchQueue.main.async {
                 self.enabled = true
@@ -116,7 +120,7 @@ final class RemoteLog: ObservableObject {
 
     private func closeSocket() {
         lock.lock()
-        if socket >= 0 { close(socket); socket = -1 }
+        if socketFD >= 0 { Darwin.close(socketFD); socketFD = -1 }
         lock.unlock()
     }
 
@@ -129,7 +133,7 @@ final class RemoteLog: ObservableObject {
         queue.async { [weak self] in
             guard let self else { return }
             self.lock.lock()
-            let fd = self.socket
+            let fd = self.socketFD
             self.lock.unlock()
             guard fd >= 0 else { return }
 
@@ -137,13 +141,13 @@ final class RemoteLog: ObservableObject {
             addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
             addr.sin_family = sa_family_t(AF_INET)
             addr.sin_port = p.bigEndian
-            guard inet_pton(AF_INET, h, &addr.sin_addr) == 1 else { return }
+            guard Darwin.inet_pton(AF_INET, h, &addr.sin_addr) == 1 else { return }
 
             let sent = withUnsafePointer(to: &addr) { ptr -> Int in
                 ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
                     payload.withUnsafeBufferPointer { buf in
-                        sendto(fd, buf.baseAddress, payload.count, 0, sa,
-                               socklen_t(MemoryLayout<sockaddr_in>.size))
+                        Darwin.sendto(fd, buf.baseAddress, payload.count, 0, sa,
+                                      socklen_t(MemoryLayout<sockaddr_in>.size))
                     }
                 }
             }
