@@ -23,7 +23,13 @@ workflows:
     instance_type: mac_mini_m2
 
     environment:
-      xcode: latest
+      # 钉在 16.4：这个版本的 Metal 编译器是自带的。
+      # 别用 latest —— Xcode 26 把 Metal Toolchain 拆成了独立可选组件，
+      # 默认不装，会出现：
+      #   error: cannot execute tool 'metal' due to missing Metal Toolchain
+      # 如果这台机器上没有 16.4，Codemagic 会直接报「Xcode version not available」，
+      # 那就改成 latest，靠下面「确保 Metal 编译器存在」那一步兜底。
+      xcode: 16.4
       cocoapods: default
 
     triggering:
@@ -40,6 +46,20 @@ workflows:
           sw_vers
           echo "--- repo ---"
           ls -la
+          echo "--- 可用 Xcode ---"
+          ls /Applications | grep -i xcode || true
+
+      # Xcode 26+ 才需要；16.x 自带 Metal 工具链，这步会打印 ineligible 然后跳过。
+      - name: 确保 Metal 编译器存在
+        script: |
+          set +e
+          echo "--- 尝试下载 MetalToolchain 组件 ---"
+          xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -20
+          echo "下载步骤返回码 = $?（16.x 上提示 ineligible 属正常，可忽略）"
+          echo "--- 检查 metal 工具 ---"
+          xcrun -f metal 2>&1 || echo "没找到 metal 工具"
+          xcrun -f metallib 2>&1 || echo "没找到 metallib"
+          exit 0
 
       - name: 列出 scheme 与配置
         script: |
