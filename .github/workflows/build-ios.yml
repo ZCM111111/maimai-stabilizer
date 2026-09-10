@@ -18,8 +18,9 @@ jobs:
       - name: 环境信息
         run: |
           xcodebuild -version
-          xcodebuild -showsdks
           sw_vers
+          echo "--- 仓库内容 ---"
+          ls -la
 
       - name: 解析 Xcode 版本号
         id: xc
@@ -28,9 +29,14 @@ jobs:
           echo "version=$V" >> $GITHUB_OUTPUT
           echo "Xcode = $V"
 
-      - name: 编译（不签名，产 .app）
+      - name: 列出 scheme（先确认 scheme 能被识别）
         run: |
-          # 注意：故意不用 set -o pipefail —— 我们要自己判 $?，把错误打出来
+          xcodebuild -project FisheyeGimbal.xcodeproj -list || true
+
+      - name: 编译（不签名，产 .app）
+        id: build
+        # 关键：不用 pipefail，失败也要继续，好让下一个步骤打日志
+        run: |
           xcodebuild \
             -project FisheyeGimbal.xcodeproj \
             -scheme FisheyeGimbal \
@@ -48,15 +54,27 @@ jobs:
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             MARKETING_VERSION=${{ steps.xc.outputs.version }} \
             clean build > xcodebuild.log 2>&1
-          RC=$?
-          echo "xcodebuild exit = $RC"
-          echo "=========================== 编译错误 / 警告 ==========================="
-          grep -nE "error:|error :|fatal error:|warning: .*deprecat" xcodebuild.log | head -120 || echo "(没有匹配到 error: 行)"
-          echo "=========================== 末尾 40 行 ==========================="
-          tail -40 xcodebuild.log
-          exit $RC
+          echo "RC=$?" >> $GITHUB_OUTPUT
+          tail -5 xcodebuild.log
+
+      # ---- 诊断步骤：无条件执行，把编译问题直接打到这里 ----
+      - name: 诊断 xcodebuild.log
+        if: always()
+        run: |
+          echo "=================== 构建结果标记 ==================="
+          grep -nE "^\*\* BUILD|^BUILD|Testing failed|The following build commands failed" xcodebuild.log | tail -20 || echo "(无 BUILD 标记)"
+          echo ""
+          echo "=================== error: 行 ==================="
+          grep -nE "error:|error :|fatal error:" xcodebuild.log | head -100 || echo "(没有 error: 行)"
+          echo ""
+          echo "=================== 项目/scheme 相关 ==================="
+          grep -niE "cannot be opened|damaged|unsupported|does not contain a scheme|scheme .* not found|missing the following|is not a valid|would you like" xcodebuild.log | head -40 || echo "(无)"
+          echo ""
+          echo "=================== 尾部 60 行 ==================="
+          tail -60 xcodebuild.log
 
       - name: 打包成 Payload/FisheyeGimbal.ipa
+        if: steps.build.outputs.RC == '0'
         run: |
           set -e
           APP=$(find build/Build/Products -name "FisheyeGimbal.app" -maxdepth 4 | head -1)
@@ -69,16 +87,15 @@ jobs:
           shasum -a 256 FisheyeGimbal-unsigned.ipa
 
       - name: 上传 ipa
+        if: steps.build.outputs.RC == '0'
         uses: actions/upload-artifact@v4
         with:
           name: FisheyeGimbal-unsigned-ipa
           path: out/FisheyeGimbal-unsigned.ipa
           if-no-files-found: error
 
-      - name: 上传完整编译日志（失败时排查用）
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xcodebuild-log
-          path: xcodebuild.log
-          if-no-files-found: ignore
+      - name: 失败则让 job 失败
+        if: steps.build.outputs.RC != '0'
+        run: |
+          echo "编译失败，RC=${{ steps.build.outputs.RC }}，看上面『诊断 xcodebuild.log』那一段"
+          exit 1

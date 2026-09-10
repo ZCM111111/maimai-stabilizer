@@ -53,11 +53,13 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     private let sessionQueue = DispatchQueue(label: "fe.camera.session")
     private let videoQueue = DispatchQueue(label: "fe.camera.video",
                                            qos: .userInitiated)
-    private var output: AVCaptureVideoDataOutput?
+    private(set) var output: AVCaptureVideoDataOutput?
     private var configured = false
     private var fps: Int = 30
-    private(set) var backCamera: BackCamera = .wideAngle
     private var deviceInput: AVCaptureDeviceInput?
+
+    /// 外接鱼眼夹在哪个镜头上。默认 0.5x 超广角。
+    @Published private(set) var backCamera: BackCamera = .ultraWide
 
     // MARK: - 权限
 
