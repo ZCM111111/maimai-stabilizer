@@ -42,9 +42,13 @@ final class RemoteLog: ObservableObject {
         return "\(parts[0]).\(parts[1]).\(parts[2]).1"
     }
 
-    /// 取本机 WiFi 的 IPv4 地址
+    /// 取本机 WiFi 的 IPv4 地址。
+    /// 先找 en0（iPhone 的 WiFi 接口），找不到就退而求其次：
+    /// 任何私有网段地址都行（10./172.16-31./192.168.）。
+    /// 这个值算不出来，定向广播地址就算不出来，日志就发不出去。
     static func localWiFiAddress() -> String? {
-        var address: String?
+        var wifi: String?
+        var fallback: String?
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard Darwin.getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
         defer { Darwin.freeifaddrs(ifaddr) }
@@ -52,34 +56,49 @@ final class RemoteLog: ObservableObject {
         while true {
             let iface = ptr.pointee
             guard let ifaAddr = iface.ifa_addr else { break }
-            let family = ifaAddr.pointee.sa_family
-            if family == UInt8(AF_INET) {
+            if ifaAddr.pointee.sa_family == UInt8(AF_INET) {
+                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                Darwin.getnameinfo(ifaAddr, socklen_t(ifaAddr.pointee.sa_len),
+                                   &hostname, socklen_t(hostname.count),
+                                   nil, 0, NI_NUMERICHOST)
+                let s = String(cString: hostname)
                 let name = String(cString: iface.ifa_name)
-                // en0 = WiFi
-                if name == "en0" {
-                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                    Darwin.getnameinfo(ifaAddr, socklen_t(ifaAddr.pointee.sa_len),
-                                       &hostname, socklen_t(hostname.count),
-                                       nil, 0, NI_NUMERICHOST)
-                    let s = String(cString: hostname)
-                    if !s.isEmpty { address = s }
+                let isPrivate = s.hasPrefix("192.168.") || s.hasPrefix("10.")
+                    || s.range(of: #"^172\.(1[6-9]|2[0-9]|3[01])\."#, options: .regularExpression) != nil
+                if name == "en0" && isPrivate {
+                    wifi = s
+                } else if isPrivate && !s.hasPrefix("127.") && fallback == nil {
+                    fallback = s
                 }
             }
             guard let next = iface.ifa_next else { break }
             ptr = next
         }
-        return address
+        return wifi ?? fallback
     }
 
     /// 本机 IP（显示用，方便你确认网段）
     static var localIP: String { localWiFiAddress() ?? "未知" }
 
-    /// 目标地址列表：始终包含广播地址（开机即发，不需要知道电脑 IP），
-    /// 如果用户另外填了具体 IP，再多发一份过去。
+    /// 目标地址列表。
+    ///
+    /// 关键：不能用 255.255.255.255（受限广播）——
+    /// 实测 iOS 会拦掉它，App 侧计数照涨但包到不了对端。
+    /// 必须是子网定向广播，例如手机 192.168.3.242/24 -> 192.168.3.255。
     private var targets: [String] {
-        var list = ["255.255.255.255"]
+        var list: [String] = []
+        // 1) 子网定向广播（主通道）
+        if let ip = Self.localWiFiAddress() {
+            let parts = ip.split(separator: ".")
+            if parts.count == 4 {
+                list.append("\(parts[0]).\(parts[1]).\(parts[2]).255")
+            }
+        }
+        // 2) 兜底：受限广播（有些网络下反而通）
+        list.append("255.255.255.255")
+        // 3) 用户手填的具体 IP
         let h = host.trimmingCharacters(in: .whitespaces)
-        if !h.isEmpty && h != "255.255.255.255" { list.append(h) }
+        if !h.isEmpty && !list.contains(h) { list.append(h) }
         return list
     }
 
@@ -120,8 +139,10 @@ final class RemoteLog: ObservableObject {
                 self.enabled = true
                 self.lastError = nil
             }
-            self.log("APP", "日志通道已建（广播模式，电脑上跑 listen-log.ps1 即可）")
-            self.log("APP", "手机WiFi=\(Self.localIP)  端口=\(self.port)  指定目标=\(self.host.isEmpty ? "无(纯广播)" : self.host)")
+            self.log("APP", "日志通道已建")
+            self.log("APP", "手机WiFi=\(Self.localIP)  端口=\(self.port)")
+            self.log("APP", "发送目标=\(self.targets.joined(separator: " , "))")
+            self.log("APP", "若电脑收不到，检查 iOS 设置->隐私与安全性->本地网络 是否允许本 App")
         }
     }
 
