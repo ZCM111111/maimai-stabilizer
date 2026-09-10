@@ -122,6 +122,9 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     }
 
     private var slots: [Slot] = []
+    /// 旧槽位退役区：rebuild 时不立刻销毁，先挂这里，
+    /// 让正在飞行中的 draw（可能还指着旧 idx）安全读到。
+    private var retiredSlots: [[Slot]] = []
     /// 最近一帧的槽索引，以及该槽是否正被显示占用
     private var latestIndex: Int = -1
     private var latestSlotBusy = false
@@ -276,7 +279,11 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         let drewIdx = lastDrawIndex
         let dSize = lastDrawableSize
         let slotN = slots.count
-        let nilTex = slots.filter { $0.dst == nil }.count
+        // 注意：这里是在 lock 保护下取的快照计数，
+        // 不要在锁外用 filter 遍历 slots —— 那会在 rebuild 时读到半个数组。
+        var nilTex = 0
+        for s in slots where s.dst == nil { nilTex += 1 }
+        let rebuilds = rebuildCount
         let why = failReason
         let rf = rpdFormat
         let vf = viewFormat
@@ -304,14 +311,11 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
 
         // 四字符格式码，例如 BGRA / 420f（YUV 全范围）/ 420v
         let fcc = Self.fourCC(fmt)
-        let s = String(format: "arr%d fps%.0f %@ %@ 丢%d | draw%d %@ idx%d/%d tex%@ nil%d dw%.0fx%.0f rpd%@/v%@ why=%@",
-                       arrivedFrames, localFPS, stage, fcc,
-                       droppedFrames + unsupported,
-                       draws, encodedOK ? "ok" : "FAIL",
-                       drewIdx, slotN,
-                       hadTex ? "有" : "无", nilTex,
-                       dSize.width, dSize.height,
-                       rf, vf, why)
+        // 用字符串插值而不是 String(format:)，避免手工数占位符数错（已经栽过两次）
+        let s = "arr\(arrivedFrames) fps\(Int(localFPS)) \(stage) \(fcc) lost\(droppedFrames + unsupported)"
+            + " | draw\(draws) \(encodedOK ? "ok" : "FAIL") idx\(drewIdx)/\(slotN)"
+            + " tex\(hadTex ? "Y" : "N") nil\(nilTex) rb\(rebuilds)"
+            + " dw\(Int(dSize.width))x\(Int(dSize.height)) rpd\(rf)/v\(vf) why=\(why)"
 
         if s != hudText { hudText = s }
         if motionActive != fresh { motionActive = fresh }
@@ -364,6 +368,14 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     /// 源帧分辨率变化时重建纹理池。
     /// 每个槽固定持有自己的纹理，之后再不流转 —— 避免"谁搬到谁"的记账错误。
     private func rebuildLocked(size: CGSize) {
+        // 已经建过同样尺寸就别重建（防重复重建把画面打断）
+        if !slots.isEmpty && size == textureSize { return }
+
+        // 旧槽位不立即销毁：draw 可能还指着旧 idx，直接清空会读到悬空槽
+        if !slots.isEmpty {
+            retiredSlots.append(slots)
+            if retiredSlots.count > 2 { retiredSlots.removeFirst() }
+        }
         slots.removeAll()
         latestIndex = -1
         latestSlotBusy = false
@@ -641,7 +653,8 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         lock.lock()
         drawEncodedOK = encoded
         drawEncodeCount += 1
-        if !localReason.isEmpty { failReason = localReason }
+        // 成功时必须清掉旧原因，否则 HUD 会一直显示历史的失败原因，误导排查
+        failReason = localReason.isEmpty ? "ok" : localReason
         lock.unlock()
 
         cmd.present(drawable)
