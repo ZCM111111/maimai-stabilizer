@@ -80,6 +80,30 @@ struct ContentView: View {
                         .padding(.bottom, 80)
                 }
             }
+
+            // 相机诊断浮层：大字直接说明卡在哪一层，不用眯眼看 HUD
+            if !camera.diagText.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("相机诊断").font(.caption).bold()
+                        Spacer()
+                        Button { camera.diagText = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Text(camera.diagText)
+                        .font(.system(size: 11, design: .monospaced))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(Color.green)
+                .padding(10)
+                .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
+                .frame(maxWidth: 330, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.top, 58)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
         }
         .onAppear {
             params.screenUp = orientationTracker.orientation.feScreenUp

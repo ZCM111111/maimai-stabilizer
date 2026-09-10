@@ -51,6 +51,25 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     @Published var sourceSize: CGSize = .zero
     /// 实际协商到的像素格式（诊断用）
     @Published var negotiatedPixelFormat: OSType = 0
+    /// 相机诊断信息（多行，直接显示在界面上）
+    @Published var diagText: String = ""
+
+    private var diagLines: [String] = []
+    private var watchdog: DispatchWorkItem?
+    private var didFallBack = false
+    /// 已收到的帧数（看门狗用它判断"到底有没有出帧"）
+    private(set) var frameCount: Int = 0
+    private var observers: [NSObjectProtocol] = []
+
+    /// 追加一行诊断（可从任意线程调用）
+    func noteDiag(_ line: String) {
+        print("[CAM] \(line)")
+        DispatchQueue.main.async {
+            self.diagLines.append(line)
+            if self.diagLines.count > 14 { self.diagLines.removeFirst(self.diagLines.count - 14) }
+            self.diagText = self.diagLines.joined(separator: "\n")
+        }
+    }
 
     private let sessionQueue = DispatchQueue(label: "fe.camera.session")
     private let videoQueue = DispatchQueue(label: "fe.camera.video",
@@ -80,64 +99,112 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     // MARK: - 生命周期
 
+    /// 装上会话状态观测。
+    /// AVCaptureSession 启动失败/被中断是静默的 —— 没有这些 handler，什么都看不到。
+    private func installObservers() {
+        guard observers.isEmpty else { return }
+        let nc = NotificationCenter.default
+        let center = session
+
+        func add(_ name: Notification.Name, _ tag: String) {
+            let token = nc.addObserver(forName: name, object: center, queue: nil) { [weak self] note in
+                guard let self else { return }
+                // 必须写成 AVError(...)，因为 userInfo 里存的是 NSError
+                var extra = ""
+                if let err = note.userInfo?[AVCaptureSessionErrorKey] as? NSError {
+                    extra = " err=\(err.code) \(err.localizedDescription)"
+                }
+                self.noteDiag(tag + extra)
+            }
+            observers.append(token)
+        }
+
+        add(.AVCaptureSessionRuntimeError, "会话运行错误")
+        add(.AVCaptureSessionWasInterrupted, "会话被中断")
+        add(.AVCaptureSessionInterruptionEnded, "会话中断结束")
+        add(.AVCaptureSessionDidStartRunning, "会话已启动")
+        add(.AVCaptureSessionDidStopRunning, "会话已停止")
+    }
+
     func start(fps: Int = 30) {
         sessionQueue.async { [weak self] in
             guard let self else { return }
             self.fps = fps
+            self.installObservers()
+
+            let auth = AVCaptureDevice.authorizationStatus(for: .video)
+            self.noteDiag("权限=\(Self.describe(auth))")
+            guard auth == .authorized else {
+                self.noteDiag("权限不足，相机不会启动")
+                return
+            }
+
             if !self.configured {
                 self.configure(fps: fps)
                 self.configured = true
             }
+            self.noteDiag("输入数=\(self.session.inputs.count) 输出数=\(self.session.outputs.count)")
+
             if !self.session.isRunning {
                 self.session.startRunning()
             }
+            self.noteDiag("startRunning 后 isRunning=\(self.session.isRunning)")
             DispatchQueue.main.async { self.running = self.session.isRunning }
+
+            self.armWatchdog()
         }
     }
 
-    /// 切换夹持的镜头（1x / 0.5x）。会重建 input。
+    /// 3.5 秒内没收到任何帧 -> 自动从 0.5x 退到 1x 重试一次
+    private func armWatchdog() {
+        watchdog?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let got = self.frameCount > 0
+            self.noteDiag("看门狗: 收到帧数=\(self.frameCount)")
+            guard !got, !self.didFallBack, self.backCamera == .ultraWide else { return }
+            self.didFallBack = true
+            self.noteDiag(">>> 超广角无帧，自动退到 1x 重试 <<<")
+            DispatchQueue.main.async { self.lastError = "0.5x 无画面，已自动切到 1x" }
+            self.selectBackCamera(.wideAngle)
+        }
+        watchdog = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5, execute: work)
+    }
+
+    static func describe(_ s: AVAuthorizationStatus) -> String {
+        switch s {
+        case .authorized:    return "已授权"
+        case .denied:        return "被拒绝"
+        case .restricted:    return "受限"
+        case .notDetermined: return "未决定"
+        @unknown default:    return "未知"
+        }
+    }
+
+    /// 切换夹持的镜头（1x / 0.5x）。重建 input + output。
     func selectBackCamera(_ cam: BackCamera) {
         sessionQueue.async { [weak self] in
             guard let self, cam != self.backCamera else { return }
+            self.noteDiag(">>> 切换镜头 -> \(cam.title) <<<")
             self.backCamera = cam
 
-            let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: [cam.deviceType],
-                                                             mediaType: .video,
-                                                             position: .back)
-            let picked = discovery.devices.first(where: { $0.deviceType == cam.deviceType })
-                ?? discovery.devices.first
-            guard let device = picked
-                    ?? AVCaptureDevice.default(cam.deviceType, for: .video, position: .back) else {
-                DispatchQueue.main.async { self.lastError = "找不到该镜头：\(cam.title)" }
-                return
-            }
-
+            // 整段重建，不要手工拆装（顺序错了会静默失败）
+            if self.session.isRunning { self.session.stopRunning() }
             self.session.beginConfiguration()
-            if let old = self.deviceInput {
-                self.session.removeInput(old)
-                self.deviceInput = nil
-            }
-            do {
-                let input = try AVCaptureDeviceInput(device: device)
-                guard self.session.canAddInput(input) else {
-                    self.session.commitConfiguration()
-                    DispatchQueue.main.async { self.lastError = "切换镜头失败" }
-                    return
-                }
-                self.session.addInput(input)
-                self.deviceInput = input
-                self.disableSystemCorrections(device)
-                self.applyFPS(self.fps, to: device)
-                if let dims = device.activeFormat.formatDescription.dimensions as CMVideoDimensions? {
-                    let s = CGSize(width: Int(dims.width), height: Int(dims.height))
-                    DispatchQueue.main.async { self.sourceSize = s }
-                }
-            } catch {
-                self.session.commitConfiguration()
-                DispatchQueue.main.async { self.lastError = "切换镜头失败: \(error.localizedDescription)" }
-                return
-            }
+            for i in self.session.inputs { self.session.removeInput(i) }
+            for o in self.session.outputs { self.session.removeOutput(o) }
             self.session.commitConfiguration()
+            self.deviceInput = nil
+            self.output = nil
+            self.configured = false
+
+            self.configure(fps: self.fps)
+            self.configured = true
+            if !self.session.isRunning { self.session.startRunning() }
+            self.noteDiag("切换后 isRunning=\(self.session.isRunning) 输入=\(self.session.inputs.count) 输出=\(self.session.outputs.count)")
+            DispatchQueue.main.async { self.running = self.session.isRunning }
+            self.armWatchdog()
         }
     }
 
@@ -189,7 +256,6 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         session.sessionPreset = .high
 
         // 选镜头：外接鱼眼夹在哪个镜头上就选哪个。
-        // 有的设备把 0.5x 报成 .builtInUltraWideAngleCamera。
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [backCamera.deviceType, .builtInWideAngleCamera],
             mediaType: .video,
@@ -203,6 +269,14 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             finishConfig(error: "找不到可用后置摄像头")
             return
         }
+
+        noteDiag("镜头=\(device.deviceType.rawValue.replacingOccurrences(of: "AVCaptureDeviceType", with: ""))")
+        noteDiag("可用=\(device.isConnected ? "已连接" : "未连接")")
+        noteDiag("发现设备数=\(discovery.devices.count)")
+
+        // 关键顺序：先定 activeFormat，再加输出。
+        // 之前是先 addOutput 再 applyFPS，session 可能锁在旧格式上。
+        applyFPS(fps, to: device)
 
         do {
             let input = try AVCaptureDeviceInput(device: device)
@@ -221,13 +295,15 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         let out = AVCaptureVideoDataOutput()
         // 必须按这个输出实际支持的格式来挑。
         // 文档明确：videoSettings 里只能放 availableVideoPixelFormatTypes 的子集，
-        // 否则系统会忽略整个字典并静默回退到 YUV —— 那正是黑屏的根因。
+        // 否则系统会忽略整个字典并静默回退到 YUV。
         let available = out.availableVideoPixelFormatTypes
         let chosen = Self.pickPixelFormat(from: available)
         out.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: chosen]
-        out.alwaysDiscardsLateVideoFrames = true          // 宁可丢帧也不堆积延迟
+        out.alwaysDiscardsLateVideoFrames = true      // 宁可丢帧也不堆积延迟
         out.setSampleBufferDelegate(self, queue: videoQueue)
 
+        noteDiag("候选格式=\(available.map { Self.fourCC($0) }.joined(separator: "/"))")
+        noteDiag("选定格式=\(Self.fourCC(chosen))")
         DispatchQueue.main.async { self.negotiatedPixelFormat = chosen }
 
         guard session.canAddOutput(out) else {
@@ -242,14 +318,14 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             conn.preferredVideoStabilizationMode = .off
         }
 
-        applyFPS(fps, to: device)
-
         session.commitConfiguration()
 
-        // 报告源分辨率
-        if let dims = device.activeFormat.formatDescription.dimensions as CMVideoDimensions? {
-            let size = CGSize(width: Int(dims.width), height: Int(dims.height))
-            DispatchQueue.main.async { self.sourceSize = size }
+        let fmt = device.activeFormat
+        let dims = CMVideoFormatDescriptionGetDimensions(fmt.formatDescription)
+        noteDiag("activeFormat=\(dims.width)x\(dims.height)")
+        noteDiag("帧率范围=\(fmt.videoSupportedFrameRateRanges.map { String(format: "%.0f-%.0f", $0.minFrameRate, $0.maxFrameRate) }.joined(separator: ","))")
+        DispatchQueue.main.async {
+            self.sourceSize = CGSize(width: Int(dims.width), height: Int(dims.height))
         }
     }
 
@@ -313,6 +389,7 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        frameCount &+= 1
         guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         onFrame?(pb, ts.isFinite ? ts : CACurrentMediaTime())
