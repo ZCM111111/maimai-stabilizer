@@ -110,21 +110,27 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     // MARK: - 槽位
 
     private final class Slot {
-        /// 转换结果：RGBA，给 fragment shader 采样
-        let dst: MTLTexture
+        /// 转换结果：RGBA，给 fragment shader 采样。
+        /// 不在槽之间流转 —— 每个槽固定持有自己的纹理，谁都不搬。
+        var dst: MTLTexture?
         /// 本槽当前占用的 CVPixelBuffer 包装（BGRA 1 个 / YUV 2 个）。
         /// 必须持有到 GPU 用完为止，否则 buffer 被回收后纹理内容失效。
         var srcWrappers: [CVMetalTexture] = []
-        var inFlight = false
-        init(dst: MTLTexture) { self.dst = dst }
+        /// 本槽正被 GPU（转换或显示）使用中
+        var busy = false
+        init() {}
     }
 
     private var slots: [Slot] = []
+    /// 最近一帧的槽索引，以及该槽是否正被显示占用
     private var latestIndex: Int = -1
+    private var latestSlotBusy = false
     private var slotCursor = 0
     private var textureSize: CGSize = .zero
     private let lock = NSLock()
     private let slotCount = 6
+    /// 纹理尺寸累计重建次数（诊断用）
+    private var rebuildCount = 0
 
     /// CVPixelBuffer -> MTLTexture 的零拷贝缓存。
     /// 比 blit 拷贝快，而且不用维护源纹理池。
@@ -143,15 +149,12 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     private var lastDrawHadTexture = false
     private var lastDrawIndex = -1
     private var lastDrawableSize: CGSize = .zero
-    private var lastDrawFrameBytes = 0
     /// 失败原因（noDrawable / noRPD / noCmdBuf / encoderNil / noTexture）
     private var failReason = "无"
     /// render pass 颜色附件纹理格式 与 view 声明格式（两者不一致会导致 encoder 创建失败）
     private var rpdFormat = "?"
     private var viewFormat = "?"
     /// MTKView 实际几何（判断 drawable 为 0 是不是因为 view 本身没尺寸）
-    private var viewBoundsSize: CGSize = .zero
-    private var viewScale: CGFloat = 0
 
     // MARK: - uniform & 统计
 
@@ -273,11 +276,10 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         let drewIdx = lastDrawIndex
         let dSize = lastDrawableSize
         let slotN = slots.count
+        let nilTex = slots.filter { $0.dst == nil }.count
         let why = failReason
         let rf = rpdFormat
         let vf = viewFormat
-        let bnd = viewBoundsSize
-        let sc = viewScale
         lock.unlock()
 
         // 帧到达情况：超过 0.5 秒没新帧就算断了
@@ -302,14 +304,13 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
 
         // 四字符格式码，例如 BGRA / 420f（YUV 全范围）/ 420v
         let fcc = Self.fourCC(fmt)
-        let s = String(format: "arr%d fps%.0f %@ %@ 丢%d | draw%d %@ idx%d/%d tex%@ dw%.0fx%.0f bd%.0fx%.0f sc%.1f rpd%@/v%@ why=%@",
+        let s = String(format: "arr%d fps%.0f %@ %@ 丢%d | draw%d %@ idx%d/%d tex%@ nil%d dw%.0fx%.0f rpd%@/v%@ why=%@",
                        arrivedFrames, localFPS, stage, fcc,
                        droppedFrames + unsupported,
                        draws, encodedOK ? "ok" : "FAIL",
                        drewIdx, slotN,
-                       hadTex ? "有" : "无",
+                       hadTex ? "有" : "无", nilTex,
                        dSize.width, dSize.height,
-                       bnd.width, bnd.height, sc,
                        rf, vf, why)
 
         if s != hudText { hudText = s }
@@ -360,17 +361,21 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         uniforms.screenUp = params.screenUp
     }
 
-    /// 源帧分辨率变化时重建输出纹理池
+    /// 源帧分辨率变化时重建纹理池。
+    /// 每个槽固定持有自己的纹理，之后再不流转 —— 避免"谁搬到谁"的记账错误。
     private func rebuildLocked(size: CGSize) {
         slots.removeAll()
         latestIndex = -1
+        latestSlotBusy = false
         slotCursor = 0
         textureSize = size
+        rebuildCount += 1
         let w = max(Int(size.width), 16)
         let h = max(Int(size.height), 16)
         for _ in 0..<slotCount {
-            guard let dst = makeTexture(w, h, .rgba8Unorm) else { continue }
-            slots.append(Slot(dst: dst))
+            let slot = Slot()
+            slot.dst = makeTexture(w, h, .rgba8Unorm)
+            slots.append(slot)
         }
         DispatchQueue.main.async { self.sourceSize = size }
         applyParamsLocked()
@@ -467,11 +472,11 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         }
         guard !slots.isEmpty else { lock.unlock(); return }
 
-        // 找一个空闲槽
+        // 找一个不忙的槽（显示占用或转换中的都跳过）
         var idx = -1
         for i in 0..<slots.count {
             let c = (slotCursor + i) % slots.count
-            if !slots[c].inFlight { idx = c; break }
+            if !slots[c].busy { idx = c; break }
         }
         guard idx >= 0 else {
             droppedFrames += 1
@@ -480,12 +485,17 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         }
         slotCursor = (idx + 1) % slots.count
         let slot = slots[idx]
-        slot.inFlight = true
+        slot.busy = true
+        guard let dstTex = slot.dst else {
+            slot.busy = false
+            lock.unlock()
+            return
+        }
         lock.unlock()
 
         // 零拷贝拿源纹理（BGRA 单平面 或 YUV420 双平面）
         guard let src = makeSourceTextures(from: pixelBuffer, width: w, height: h) else {
-            lock.lock(); slot.inFlight = false; lock.unlock()
+            lock.lock(); slot.busy = false; lock.unlock()
             return
         }
         lock.lock()
@@ -494,19 +504,21 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         lock.unlock()
 
         guard let cmd = queue.makeCommandBuffer() else {
-            lock.lock(); slot.inFlight = false; slot.srcWrappers = []; lock.unlock()
+            lock.lock(); slot.busy = false; slot.srcWrappers = []; lock.unlock()
             return
         }
 
         if let enc = cmd.makeComputeCommandEncoder() {
             enc.label = "FEConvert"
             enc.setComputePipelineState(convertPSO)
-            // slot0 = 单平面纹理；slot1/slot2 = Y / CbCr
-            let blank = src.textures[0]
-            enc.setTexture(src.textures.count > 0 ? src.textures[0] : blank, index: 0)
-            enc.setTexture(src.textures.count > 1 ? src.textures[1] : blank, index: 1)
-            enc.setTexture(blank, index: 2)
-            enc.setTexture(slot.dst, index: 3)
+            // 单平面源只读 textures[0]；YUV 读 [0]=Y、[1]=CbCr。
+            // 用同一张纹理填坑不会出错：shader 只读它需要的那些。
+            let plane0 = src.textures[0]
+            let plane1 = src.textures.count > 1 ? src.textures[1] : plane0
+            enc.setTexture(plane0, index: 0)
+            enc.setTexture(plane1, index: 1)
+            enc.setTexture(plane0, index: 2)
+            enc.setTexture(dstTex, index: 3)
             var fmt32 = srcFormat
             enc.setBytes(&fmt32, length: MemoryLayout<UInt32>.size, index: 0)
             enc.dispatchThreadgroups(
@@ -519,7 +531,7 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
             guard let self else { return }
             // 必须等 GPU 用完才能放掉 buffer 包装
             self.lock.lock()
-            slot.inFlight = false
+            slot.busy = false
             slot.srcWrappers = []
             self.lock.unlock()
         }
@@ -586,11 +598,12 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         var u = uniforms
         let idx = latestIndex
         var tex: MTLTexture?
-        if idx >= 0, idx < slots.count {
-            tex = slots[idx].dst
+        if idx >= 0, idx < slots.count, let t = slots[idx].dst {
+            tex = t
             // 关键：把这一槽占住，直到本帧显示用的 command buffer 结束。
-            // 否则新到的摄像头帧可能复用它，GPU 上出现「读的同时在写」→ 画面撕裂/闪白。
-            slots[idx].inFlight = true
+            // 否则新到的摄像头帧可能复用它，GPU 上出现「读的同时在写」→ 撕裂。
+            slots[idx].busy = true
+            latestSlotBusy = true
         }
         // 诊断：记录这一帧的实际状态
         lastDrawHadTexture = (tex != nil)
@@ -605,8 +618,6 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         }
         rpdFormat = rpdFmtText
         viewFormat = "\(view.colorPixelFormat.rawValue)"
-        viewBoundsSize = view.bounds.size
-        viewScale = view.window?.screen.nativeScale ?? view.contentScaleFactor
         lock.unlock()
 
         let enc = cmd.makeRenderCommandEncoder(descriptor: rpd)
@@ -634,10 +645,12 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         lock.unlock()
 
         cmd.present(drawable)
+        let releaseIdx = encoded ? idx : -1
         cmd.addCompletedHandler { [weak self] _ in
-            guard let self, idx >= 0 else { return }
+            guard let self, releaseIdx >= 0 else { return }
             self.lock.lock()
-            if idx < self.slots.count { self.slots[idx].inFlight = false }
+            if releaseIdx < self.slots.count { self.slots[releaseIdx].busy = false }
+            self.latestSlotBusy = false
             self.lock.unlock()
         }
         cmd.commit()
