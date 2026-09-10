@@ -67,8 +67,9 @@ static inline float  feMaxR(constant FEUniforms &u)     { return u.slots3.y; }
 static inline float  feFeather(constant FEUniforms &u)  { return u.slots3.z; }
 static inline float  feExposure(constant FEUniforms &u) { return u.slots3.w; }
 static inline float2 feScreenUp(constant FEUniforms &u) { return u.screenUp_.xy; }
-static inline uint   feTestPattern(constant FEUniforms &u) { return as_type<uint>(u.screenUp_.z) >> 16; }
-static inline uint   fePoseBypass(constant FEUniforms &u)  { return as_type<uint>(u.screenUp_.z) & 0xFFFFu; }
+// screenUp_.z 打包：高 16 位 = 显示模式，低 16 位 = 姿态旁路
+static inline uint   feMode(constant FEUniforms &u)       { return as_type<uint>(u.screenUp_.z) >> 16; }
+static inline uint   fePoseBypass(constant FEUniforms &u) { return as_type<uint>(u.screenUp_.z) & 0xFFFFu; }
 
 // equisolid: r = 2 f sin(theta/2)
 static inline float feRadiusFromTheta(float theta, float f, float model) {
@@ -163,10 +164,14 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
     float  eFeather = feFeather(u);
     float2 screenUp = feScreenUp(u);
 
-    // ---- 0a) 测试图模式：证明 shader 确实在跑、输出确实可见 ----
-    // 看不到同心环 = shader 没执行（管线/PSO 的问题）
-    // 看到同心环但正常模式全黑 = 数学算出来的就是黑的
-    if (feTestPattern(u) != 0u) {
+    // ---- 0) 显示模式（诊断用，绕开全部去畸变数学）----
+    // 0 = 正常去畸变
+    // 1 = 同心环测试图        （验证 shader 在执行、输出可见）
+    // 2 = 直接采样源纹理      （验证纹理里到底有没有画面数据）
+    // 3 = 采样算出的 UV 坐标着色（红=u 绿=v，验证去畸变算出的坐标范围）
+    // 4 = 只画中心 60px 圆点  （验证原始像素到屏幕的通路）
+    uint mode = feMode(u);
+    if (mode == 1u) {
         float2 c2 = in.uv;
         float rr = length(c2);
         float ring = fract(rr * 6.0f);
@@ -175,6 +180,21 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
         if (rr < 0.45f) { tp = float3(0.0f, 0.9f, 0.1f); }
         if (rr > 0.95f) { tp = float3(1.0f, 1.0f, 1.0f); }
         return float4(tp, 1.0f);
+    }
+    if (mode == 2u) {
+        // 源纹理 UV 直接铺满屏幕。若正常模式全黑但这个有画面，
+        // 说明纹理有数据，问题在去畸变数学；若这个也黑，说明纹理里就是黑的。
+        float2 uv2 = float2((in.uv.x + 1.0f) * 0.5f, (1.0f - in.uv.y) * 0.5f);
+        float4 c = srcTex.sample(samp, uv2);
+        return float4(c.rgb, 1.0f);
+    }
+    if (mode == 4u) {
+        // 只画一个小红点，位置对应源纹理正中心
+        float2 uv2 = float2((in.uv.x + 1.0f) * 0.5f, (1.0f - in.uv.y) * 0.5f);
+        float2 cd = uv2 - float2(0.5f, 0.5f);
+        float d = length(cd * float2(srcSize.x, srcSize.y));
+        if (d < 60.0f) { return float4(1.0f, 0.0f, 0.0f, 1.0f); }
+        return float4(0.05f, 0.05f, 0.05f, 1.0f);
     }
 
     // ---- 1) 该像素对应的输出小孔光线（右手系：x 右、y 下、z 前）----
@@ -216,6 +236,7 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
     // ---- 4) 计算到源图像素坐标 ----
     float theta = acos(clamp(dot(P, f), -1.0f, 1.0f));
     if (theta > maxTheta) {
+        if (mode == 3u) { return float4(1.0f, 1.0f, 1.0f, 1.0f); }  // 白 = 超出 maxTheta
         return float4(0.0f, 0.0f, 0.0f, 1.0f);   // 超出镜头视野 -> 黑边
     }
 
@@ -225,6 +246,18 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
 
     float2 offset = (xy > 1e-6f) ? (float2(x, y) / xy * r) : float2(0.0f, 0.0f);
     float2 srcPix = center + offset;
+
+    // 模式 3：把算出的源像素坐标直接染色，用来验证坐标是否落在合理范围
+    //   红 = x 方向（0 左 1 右），绿 = y 方向（0 上 1 下）
+    //   出界 -> 品红；超出 maxTheta -> 白
+    if (mode == 3u) {
+        if (srcPix.x < 0.0f || srcPix.y < 0.0f ||
+            srcPix.x > srcSize.x || srcPix.y > srcSize.y) {
+            return float4(1.0f, 0.0f, 1.0f, 1.0f);      // 品红 = 采样坐标出界
+        }
+        float2 n = srcPix / srcSize;
+        return float4(n.x, n.y, 0.2f, 1.0f);
+    }
 
     // ---- 5) 采样（越界就黑掉，避免 clamp_to_edge 拉出条纹）----
     float hr = (maxR > 0.0f) ? maxR : (srcSize.x * 0.5f);

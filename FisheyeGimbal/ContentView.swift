@@ -259,8 +259,15 @@ struct ControlPanel: View {
 
                         Divider()
                         Text("诊断").font(.caption2).bold()
-                        Toggle("显示测试图（同心环）", isOn: $params.showTestPattern)
-                            .font(.caption2)
+                        Picker("显示模式", selection: $params.displayMode) {
+                            Text("0 正常去畸变").tag(0)
+                            Text("1 同心环测试图").tag(1)
+                            Text("2 直接采样源纹理").tag(2)
+                            Text("3 UV 坐标着色").tag(3)
+                            Text("4 中心红点").tag(4)
+                        }
+                        .pickerStyle(.menu)
+                        .font(.caption2)
                         Toggle("跳过姿态补偿", isOn: $params.poseBypass)
                             .font(.caption2)
 

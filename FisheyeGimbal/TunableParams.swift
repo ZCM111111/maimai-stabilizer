@@ -55,8 +55,10 @@ final class TunableParams: ObservableObject {
     /// 屏幕上方在源帧平面内的方向（由界面方向决定）
     var screenUp: SIMD2<Float> = SIMD2<Float>(0, -1) { didSet { changed() } }
 
-    /// 诊断开关：画同心圆环测试图（验证 shader 是否在跑、输出是否可见）
-    @Published var showTestPattern = false { didSet { changed() } }
+    /// 诊断：显示模式
+    /// 0 正常去畸变 / 1 同心环测试图 / 2 直接采样源纹理 /
+    /// 3 UV 坐标着色 / 4 中心红点
+    @Published var displayMode: Int = 0 { didSet { changed() } }
 
     /// 诊断开关：跳过姿态补偿，直接取原始鱼眼画面（区分"数学错"还是"姿态错"）
     @Published var poseBypass = false { didSet { changed() } }
