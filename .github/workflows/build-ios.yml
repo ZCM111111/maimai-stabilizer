@@ -30,7 +30,7 @@ jobs:
 
       - name: 编译（不签名，产 .app）
         run: |
-          set -o pipefail
+          # 注意：故意不用 set -o pipefail —— 我们要自己判 $?，把错误打出来
           xcodebuild \
             -project FisheyeGimbal.xcodeproj \
             -scheme FisheyeGimbal \
@@ -47,7 +47,14 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=16.0 \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             MARKETING_VERSION=${{ steps.xc.outputs.version }} \
-            clean build | tee xcodebuild.log | tail -80
+            clean build > xcodebuild.log 2>&1
+          RC=$?
+          echo "xcodebuild exit = $RC"
+          echo "=========================== 编译错误 / 警告 ==========================="
+          grep -nE "error:|error :|fatal error:|warning: .*deprecat" xcodebuild.log | head -120 || echo "(没有匹配到 error: 行)"
+          echo "=========================== 末尾 40 行 ==========================="
+          tail -40 xcodebuild.log
+          exit $RC
 
       - name: 打包成 Payload/FisheyeGimbal.ipa
         run: |
