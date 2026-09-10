@@ -1,0 +1,134 @@
+# Codemagic CI 配置
+#
+# 用法：
+#   1. https://codemagic.io 用 GitHub 登录
+#   2. Add application -> 选 ZCM111111/maimai-stabilizer
+#   3. 构建类型选 "iOS App Store"（或任意 iOS 类型），Codemagic 会自动读本文件
+#   4. 首次去 Teams -> Code signing identities 里加一个 Apple ID（免费账号也行）
+#   5. 点 Start new build
+#
+# 免费额度：500 min/月 macOS，公开仓库再送 500 min。
+# 免付费开发者账号就能拿到临时 profile，构建完给二维码，手机扫码直接装。
+
+workflows:
+  ios-unsigned:
+    name: iOS 未签名构建（只要 ipa，签名自己搞）
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+      cocoapods: default
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    scripts:
+      - name: 环境信息
+        script: |
+          xcodebuild -version
+          sw_vers
+      - name: 列出 scheme
+        script: |
+          xcodebuild -project FisheyeGimbal.xcodeproj -list
+      - name: 编译并打包 ipa
+        script: |
+          set -e
+          # 不签名先出 .app，再手搓 Payload/ 打成 ipa
+          xcodebuild \
+            -project FisheyeGimbal.xcodeproj \
+            -scheme FisheyeGimbal \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            IPHONEOS_DEPLOYMENT_TARGET=16.0 \
+            clean build
+          APP=$(find build/Build/Products -name "FisheyeGimbal.app" -maxdepth 4 | head -1)
+          echo "APP = $APP"
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          cd out && zip -qr FisheyeGimbal-unsigned.ipa Payload
+          ls -lh FisheyeGimbal-unsigned.ipa
+    artifacts:
+      - out/*.ipa
+      - build/Build/Products/**/*.app
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      email:
+        recipients:
+          - your@email.com
+        notify:
+          success: true
+          failure: true
+
+  # 推荐用这个：Codemagic 帮你签名 + 给二维码，手机扫码直接装
+  ios-signed:
+    name: iOS 自动签名构建（推荐）
+    max_build_duration: 45
+    instance_type: mac_mini_m2
+    integrations:
+      # 在 Codemagic -> Teams -> Code signing identities 加好 Apple ID 后，
+      # 这里填那个 integration 的名字（不填则用默认的）
+      app_store_connect: default
+    environment:
+      xcode: latest
+      ios_signing:
+        # development = 临时 profile，7 天有效，免费 Apple ID 也能用
+        # ad_hoc / app_store = 需要付费开发者账号
+        distribution_type: development
+        bundle_identifier: com.seagull.fisheyegimbal
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    scripts:
+      - name: 环境信息
+        script: |
+          xcodebuild -version
+      - name: 设置签名（Codemagic 自动生成并注入 profile）
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "com.seagull.fisheyegimbal" \
+            --type IOS_APP_DEVELOPMENT \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: 编译并导出 ipa
+        script: |
+          set -e
+          xcodebuild -project FisheyeGimbal.xcodeproj \
+            -scheme FisheyeGimbal \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            IPHONEOS_DEPLOYMENT_TARGET=16.0 \
+            clean archive
+          # 用自动生成的导出配置导出 ipa
+          xcodebuild -exportArchive \
+            -archivePath "$(find build/Build/Products -name '*.xcarchive' | head -1)" \
+            -exportOptionsPlist /tmp/xcodebuild_export_options.plist \
+            -exportPath out
+          ls -lh out
+    artifacts:
+      - out/*.ipa
+      - build/Build/Products/**/*.app
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      # 构建完给一个安装页二维码，手机扫码直接装，不用 AltStore
+      email:
+        recipients:
+          - your@email.com
+        notify:
+          success: true
+          failure: true
