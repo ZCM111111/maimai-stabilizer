@@ -35,9 +35,10 @@ struct FisheyeGimbalApp: App {
                 }
                 .onAppear {
                     UIApplication.shared.isIdleTimerDisabled = true
-                    // 启动即发一条，确认网络通路（哪怕后面什么都没跑起来）
+                    // 开机就自动广播日志，不需要用户配置任何东西
+                    RemoteLog.shared.autoStart()
                     RemoteLog.shared.log("APP", "启动 设备=\(UIDevice.current.name) 系统=\(UIDevice.current.systemVersion)")
-                    RemoteLog.shared.log("APP", "本机WiFi=\(RemoteLog.localIP) 目标=\(RemoteLog.shared.host):\(RemoteLog.shared.port) 开关=\(RemoteLog.shared.enabled ? "开" : "关")")
+                    RemoteLog.shared.log("APP", "手机WiFi=\(RemoteLog.localIP) 端口=\(RemoteLog.shared.port) 指定目标=\(RemoteLog.shared.host.isEmpty ? "无(纯广播)" : RemoteLog.shared.host)")
                     CameraCapture.requestAccess { ok in
                         RemoteLog.shared.log("APP", "相机权限=\(ok ? "通过" : "拒绝")")
                         if ok { camera.start(fps: 60) } else { camera.lastError = "摄像头权限被拒绝" }

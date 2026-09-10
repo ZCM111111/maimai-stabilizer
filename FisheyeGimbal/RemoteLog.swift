@@ -74,12 +74,28 @@ final class RemoteLog: ObservableObject {
     /// 本机 IP（显示用，方便你确认网段）
     static var localIP: String { localWiFiAddress() ?? "未知" }
 
+    /// 目标地址列表：始终包含广播地址（开机即发，不需要知道电脑 IP），
+    /// 如果用户另外填了具体 IP，再多发一份过去。
+    private var targets: [String] {
+        var list = ["255.255.255.255"]
+        let h = host.trimmingCharacters(in: .whitespaces)
+        if !h.isEmpty && h != "255.255.255.255" { list.append(h) }
+        return list
+    }
+
+    private var resolvedPort: UInt16 {
+        UInt16(port.trimmingCharacters(in: .whitespaces)) ?? 9876
+    }
+
+    /// 开机即调：建 socket + 自动广播，不需要用户做任何事
+    @discardableResult
+    func autoStart() -> Bool {
+        if !enabled { start() }
+        return enabled
+    }
+
     func setEnabled(_ on: Bool) {
-        if on {
-            start()
-        } else {
-            stop()
-        }
+        if on { start() } else { stop() }
     }
 
     func start() {
@@ -94,7 +110,7 @@ final class RemoteLog: ObservableObject {
                 }
                 return
             }
-            // 广播许可，方便试 255.255.255.255
+            // 广播许可：255.255.255.255 必需
             var on: Int32 = 1
             Darwin.setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, socklen_t(MemoryLayout<Int32>.size))
             self.lock.lock()
@@ -104,8 +120,8 @@ final class RemoteLog: ObservableObject {
                 self.enabled = true
                 self.lastError = nil
             }
-            self.send("=== FisheyeGimbal 日志已接通 ===")
-            self.send("本机IP=\(Self.localIP)  目标=\(self.host):\(self.port)")
+            self.log("APP", "日志通道已建（广播模式，电脑上跑 listen-log.ps1 即可）")
+            self.log("APP", "手机WiFi=\(Self.localIP)  端口=\(self.port)  指定目标=\(self.host.isEmpty ? "无(纯广播)" : self.host)")
         }
     }
 
@@ -124,12 +140,15 @@ final class RemoteLog: ObservableObject {
         lock.unlock()
     }
 
-    /// 发送一行（可从任意线程调用，不阻塞）
+    /// 发送一行（可从任意线程调用，不阻塞）。
+    /// 同时发往广播地址 + 用户指定的具体 IP。
     func send(_ line: String) {
         guard enabled else { return }
-        let h = host.trimmingCharacters(in: .whitespaces)
-        guard let p = UInt16(port.trimmingCharacters(in: .whitespaces)), !h.isEmpty else { return }
+        let p = resolvedPort
+        let list = targets
+        guard !list.isEmpty else { return }
         let payload = Array((line + "\n").utf8)
+
         queue.async { [weak self] in
             guard let self else { return }
             self.lock.lock()
@@ -137,22 +156,24 @@ final class RemoteLog: ObservableObject {
             self.lock.unlock()
             guard fd >= 0 else { return }
 
-            var addr = sockaddr_in()
-            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-            addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = p.bigEndian
-            guard Darwin.inet_pton(AF_INET, h, &addr.sin_addr) == 1 else { return }
+            for h in list {
+                var addr = sockaddr_in()
+                addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+                addr.sin_family = sa_family_t(AF_INET)
+                addr.sin_port = p.bigEndian
+                guard Darwin.inet_pton(AF_INET, h, &addr.sin_addr) == 1 else { continue }
 
-            let sent = withUnsafePointer(to: &addr) { ptr -> Int in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                    payload.withUnsafeBufferPointer { buf in
-                        Darwin.sendto(fd, buf.baseAddress, payload.count, 0, sa,
-                                      socklen_t(MemoryLayout<sockaddr_in>.size))
+                let sent = withUnsafePointer(to: &addr) { ptr -> Int in
+                    ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                        payload.withUnsafeBufferPointer { buf in
+                            Darwin.sendto(fd, buf.baseAddress, payload.count, 0, sa,
+                                          socklen_t(MemoryLayout<sockaddr_in>.size))
+                        }
                     }
                 }
-            }
-            if sent > 0 {
-                DispatchQueue.main.async { self.sentLines += 1 }
+                if sent > 0 {
+                    DispatchQueue.main.async { self.sentLines += 1 }
+                }
             }
         }
     }
