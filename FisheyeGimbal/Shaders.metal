@@ -76,14 +76,44 @@ static inline float feCorrectRadius(float r, float k1, float k2) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 1: BGRA -> RGBA
+// Pass 1: 源帧 -> RGBA
+//   sourceFormat: 0 = BGRA(单平面)  1 = YUV420 biplanar full range
+//                2 = YUV420 biplanar video range
+//
+//   必须支持 YUV：AVCaptureVideoDataOutput 在很多摄像头格式上压根不支持 BGRA，
+//   那时系统会静默回退到 420v/420f —— 这正是首版黑屏的根因。
 // ---------------------------------------------------------------------------
-kernel void FEConvertKernel(texture2d<float, access::read>  inTex  [[texture(0)]],
-                            texture2d<float, access::write> outTex [[texture(1)]],
+kernel void FEConvertKernel(texture2d<float, access::read>  inTex   [[texture(0)]],
+                            texture2d<float, access::read>  inYTex  [[texture(1)]],
+                            texture2d<float, access::read>  inUVTex [[texture(2)]],
+                            texture2d<float, access::write> outTex  [[texture(3)]],
+                            constant uint &sourceFormat [[buffer(0)]],
                             uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) { return; }
-    float4 c = inTex.read(gid);
-    outTex.write(float4(c.b, c.g, c.r, 1.0f), gid);
+
+    float4 rgba;
+    if (sourceFormat == 0u) {
+        float4 c = inTex.read(gid);
+        rgba = float4(c.b, c.g, c.r, 1.0f);   // BGRA 字节序 -> RGBA
+    } else {
+        // NV12：Y 全分辨率单平面，CbCr 半分辨率交错在一个平面里
+        float y  = inYTex.read(gid).r;
+        float2 chroma = inUVTex.read(uint2(gid.x >> 1, gid.y >> 1)).rg;
+        float cb = chroma.r;
+        float cr = chroma.g;
+
+        float yv  = (sourceFormat == 1u) ? y : (y - (16.0f / 255.0f)) * (255.0f / 219.0f);
+        float cbv = (sourceFormat == 1u) ? (cb - 0.5f)
+                                         : (cb - (128.0f / 255.0f)) * (255.0f / 224.0f);
+        float crv = (sourceFormat == 1u) ? (cr - 0.5f)
+                                         : (cr - (128.0f / 255.0f)) * (255.0f / 224.0f);
+
+        float r = yv + 1.5748f * crv;                       // BT.709
+        float g = yv - 0.1873f * cbv - 0.4681f * crv;
+        float b = yv + 1.8556f * cbv;
+        rgba = float4(clamp(float3(r, g, b), 0.0f, 1.0f), 1.0f);
+    }
+    outTex.write(rgba, gid);
 }
 
 // ---------------------------------------------------------------------------

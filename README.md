@@ -65,6 +65,63 @@ Windows 上 Sideloadly 流程：
 **首次安装前必须做**：iPhone → `设置 → 隐私与安全性 → 开发者模式` → 打开 → 重启手机。
 不开这个，装完点图标会闪退。
 
+### ⚠️ 签名工具登录失败？先查这一个东西
+
+如果 iLoader / 爱思助手 / Sideloadly / isideload 全部**登录失败**，报这些错：
+
+```
+● Failed to send initial login request
+● Received error response from grandslam
+● HTTP status server error (503) for url https://gsa.apple.com/grandslam/GsService2
+Get XcodeToken err SRP_Setp1 err: hsc=200 ec=-22410
+schannel: SEC_E_UNTRUSTED_ROOT (0x80090325)
+```
+
+**八成不是苹果炸了，也不是工具坏了，是你系统的根证书库里缺 `Apple Root CA`。**
+
+`gsa.apple.com`（Apple ID 认证唯一入口）的证书链只送到中间 CA
+`Apple Server Authentication CA`，根证书必须由本机信任库补上。
+系统里没有 Apple 根证书 → TLS 握手 `SEC_E_UNTRUSTED_ROOT` → 链建不起来 → 签名必失败。
+**所有依赖 gsa.apple.com 的工具都会一起死**，换工具没用。
+
+一条命令自查：
+
+```powershell
+$tcp = New-Object System.Net.Sockets.TcpClient('gsa.apple.com',443)
+$ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(),$false,({$true}))
+$ssl.AuthenticateAsClient('gsa.apple.com')
+$x = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $ssl.RemoteCertificate
+$c = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+"Chain.Build = " + $c.Build($x)      # 应该是 True；False 就是缺根证书
+$c.ChainStatus | ForEach-Object { $_.Status }
+```
+
+修复（**要管理员权限，会弹 UAC**）：
+
+```powershell
+# 1. 从 apple.com 下根证书（这个域名通常能直连）
+Invoke-WebRequest "https://www.apple.com/appleca/AppleIncRootCertificate.cer" `
+  -OutFile "$env:USERPROFILE\Desktop\AppleIncRootCertificate.cer"
+
+# 2. 装进「受信任的根证书颁发机构」
+Start-Process certutil -ArgumentList "-addstore","-f","Root", `
+  "`"$env:USERPROFILE\Desktop\AppleIncRootCertificate.cer`"" -Verb RunAs -Wait
+
+# 3. 验证
+Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -match 'Apple Root CA' }
+```
+
+装完再跑上面那条自查，`Chain.Build` 应该变成 `True`。
+
+证书本身在仓库里也带了一份：`FisheyeGimbal/AppleRootCA.cer`。
+
+如果还不行，再补装 G2 / G3 两个：
+
+```
+https://www.apple.com/certificateauthority/AppleRootCA-G3.cer
+https://www.apple.com/certificateauthority/AppleRootCA-G2.cer
+```
+
 ---
 
 ## 1. 算法

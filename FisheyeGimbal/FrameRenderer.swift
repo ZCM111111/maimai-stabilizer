@@ -112,9 +112,9 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     private final class Slot {
         /// 转换结果：RGBA，给 fragment shader 采样
         let dst: MTLTexture
-        /// 本槽当前占用的 CVPixelBuffer 包装。必须持有到 GPU 用完为止，
-        /// 否则 buffer 被回收后纹理内容失效。
-        var srcWrapper: CVMetalTexture?
+        /// 本槽当前占用的 CVPixelBuffer 包装（BGRA 1 个 / YUV 2 个）。
+        /// 必须持有到 GPU 用完为止，否则 buffer 被回收后纹理内容失效。
+        var srcWrappers: [CVMetalTexture] = []
         var inFlight = false
         init(dst: MTLTexture) { self.dst = dst }
     }
@@ -129,6 +129,10 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     /// CVPixelBuffer -> MTLTexture 的零拷贝缓存。
     /// 比 blit 拷贝快，而且不用维护源纹理池。
     private var textureCache: CVMetalTextureCache?
+
+    /// 诊断用：最近一帧到达的时刻、像素格式、被丢掉的格式不符帧数
+    private var lastPixelFormat: OSType = 0
+    private var unsupportedFormatFrames = 0
 
     // MARK: - uniform & 统计
 
@@ -237,10 +241,54 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         let now = CACurrentMediaTime()
         let snap = motion.state.snapshot()
         let fresh = (snap != nil) && (now - (snap?.timestamp ?? 0) < 0.5)
-        let s = String(format: "cam %.0f fps · render %.0f fps · imu %@ · drop %d",
-                       cameraFPS, renderFPS, fresh ? "ok" : "－", droppedFrames)
+
+        lock.lock()
+        let lastArrival = lastFrameWall
+        let fmt = lastPixelFormat
+        let unsupported = unsupportedFormatFrames
+        let localFPS = cameraFPS
+        lock.unlock()
+
+        // 帧到达情况：超过 0.5 秒没新帧就算断了
+        let frameArriving = lastArrival > 0 && (now - lastArrival) < 0.5
+        let supported: [OSType] = [
+            kCVPixelFormatType_32BGRA,
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        ]
+        let stage: String
+        if lastArrival == 0 {
+            stage = "无帧"
+        } else if !frameArriving {
+            stage = String(format: "断流%.0fs", now - lastArrival)
+        } else if !supported.contains(fmt) {
+            stage = "格式不支持"        // 帧在到，但像素格式我们转不了
+        } else if localFPS < 1 {
+            stage = "刚起帧"
+        } else {
+            stage = "ok"
+        }
+
+        // 四字符格式码，例如 BGRA / 420f（YUV 全范围）/ 420v
+        let fcc = Self.fourCC(fmt)
+        let s = String(format: "cam %.0f · %.0f rps · %@ · %@ · 丢%d",
+                       localFPS, renderFPS, stage, fcc, droppedFrames + unsupported)
+
         if s != hudText { hudText = s }
         if motionActive != fresh { motionActive = fresh }
+    }
+
+    /// OSType -> 可读的四字符码
+    static func fourCC(_ code: OSType) -> String {
+        guard code != 0 else { return "----" }
+        let bytes = [
+            UInt8((code >> 24) & 0xFF),
+            UInt8((code >> 16) & 0xFF),
+            UInt8((code >> 8) & 0xFF),
+            UInt8(code & 0xFF)
+        ]
+        let scalars = bytes.map { (32...126).contains($0) ? Character(UnicodeScalar($0)) : "?" }
+        return String(scalars)
     }
 
     // MARK: - 参数
@@ -298,24 +346,52 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         return device.makeTexture(descriptor: d)
     }
 
-    /// 零拷贝：把 BGRA 的 CVPixelBuffer 包成 Metal 纹理。
-    /// 调用方必须把返回的 CVMetalTexture 一直持有到 GPU 用完。
-    private func makeTexture(from pixelBuffer: CVPixelBuffer,
-                             width: Int, height: Int) -> (MTLTexture, CVMetalTexture)? {
+    /// 零拷贝：把 CVPixelBuffer 包成 Metal 纹理。
+    /// 单平面(BGRA)只填 textures[0]；BiPlanar(YUV420) 填 textures[0]=Y、[1]=CbCr。
+    /// 返回的包装必须一直持有到 GPU 用完，否则 buffer 回收后纹理内容失效。
+    private struct SourceTextures {
+        var textures: [MTLTexture] = []
+        var wrappers: [CVMetalTexture] = []
+        var format: UInt32 = 0        // 0=BGRA 1=YUV420f 2=YUV420v
+    }
+
+    private func makeSourceTextures(from pixelBuffer: CVPixelBuffer,
+                                    width: Int, height: Int) -> SourceTextures? {
         guard let cache = textureCache else { return nil }
+        let fmt = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        var out = SourceTextures()
+
+        switch fmt {
+        case kCVPixelFormatType_32BGRA:
+            if let t = wrapPlane(pixelBuffer, cache, .bgra8Unorm, width, height, 0) {
+                out.textures = [t.0]; out.wrappers = [t.1]; out.format = 0
+            }
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+            // Y 平面 = r8Unorm；CbCr 交错平面 = rg8Unorm，尺寸减半
+            if let y = wrapPlane(pixelBuffer, cache, .r8Unorm, width, height, 0),
+               let uv = wrapPlane(pixelBuffer, cache, .rg8Unorm, width / 2, height / 2, 1) {
+                out.textures = [y.0, uv.0]; out.wrappers = [y.1, uv.1]; out.format = 1
+            }
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+            if let y = wrapPlane(pixelBuffer, cache, .r8Unorm, width, height, 0),
+               let uv = wrapPlane(pixelBuffer, cache, .rg8Unorm, width / 2, height / 2, 1) {
+                out.textures = [y.0, uv.0]; out.wrappers = [y.1, uv.1]; out.format = 2
+            }
+        default:
+            return nil
+        }
+        return out.textures.isEmpty ? nil : out
+    }
+
+    private func wrapPlane(_ pixelBuffer: CVPixelBuffer,
+                           _ cache: CVMetalTextureCache,
+                           _ format: MTLPixelFormat,
+                           _ w: Int, _ h: Int, _ plane: Int) -> (MTLTexture, CVMetalTexture)? {
+        guard w > 0, h > 0 else { return nil }
         var cvTex: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault,
-            cache,
-            pixelBuffer,
-            nil,
-            .bgra8Unorm,
-            width,
-            height,
-            0,
-            &cvTex)
-        guard status == kCVReturnSuccess,
-              let cvTex,
+            kCFAllocatorDefault, cache, pixelBuffer, nil, format, w, h, plane, &cvTex)
+        guard status == kCVReturnSuccess, let cvTex,
               let mtl = CVMetalTextureGetTexture(cvTex) else { return nil }
         return (mtl, cvTex)
     }
@@ -323,10 +399,28 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     // MARK: - 摄像头帧入口（在 AVCapture 的视频队列上调用）
 
     func enqueue(_ pixelBuffer: CVPixelBuffer, captureTime: Double) {
-        guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA else { return }
+        // 先记录"帧到了"——放在所有 guard 之前，
+        // 这样 HUD 能区分「摄像头没出帧」和「帧到了但被我们丢掉」。
+        let fmt = CVPixelBufferGetPixelFormatType(pixelBuffer)
         let w = CVPixelBufferGetWidth(pixelBuffer)
         let h = CVPixelBufferGetHeight(pixelBuffer)
         let size = CGSize(width: w, height: h)
+
+        lock.lock()
+        lastFrameWall = CACurrentMediaTime()
+        lastPixelFormat = fmt
+        lock.unlock()
+
+        // 只接受我们确实能转成 RGBA 的格式（BGRA / YUV420 双平面）
+        let supported: [OSType] = [
+            kCVPixelFormatType_32BGRA,
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        ]
+        guard supported.contains(fmt) else {
+            lock.lock(); unsupportedFormatFrames += 1; lock.unlock()
+            return
+        }
 
         lock.lock()
         if size != textureSize {
@@ -350,27 +444,32 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         slot.inFlight = true
         lock.unlock()
 
-        // 零拷贝拿到 BGRA 源纹理。
-        // 之前这里用 blit.copy(from: pixelBuffer, to: src) 是错的 ——
-        // 那个重载两边都要 MTLTexture，塞 CVPixelBuffer 编不过。
-        guard let (srcTex, wrapper) = makeTexture(from: pixelBuffer, width: w, height: h) else {
+        // 零拷贝拿源纹理（BGRA 单平面 或 YUV420 双平面）
+        guard let src = makeSourceTextures(from: pixelBuffer, width: w, height: h) else {
             lock.lock(); slot.inFlight = false; lock.unlock()
             return
         }
         lock.lock()
-        slot.srcWrapper = wrapper
+        slot.srcWrappers = src.wrappers
+        let srcFormat = src.format
         lock.unlock()
 
         guard let cmd = queue.makeCommandBuffer() else {
-            lock.lock(); slot.inFlight = false; slot.srcWrapper = nil; lock.unlock()
+            lock.lock(); slot.inFlight = false; slot.srcWrappers = []; lock.unlock()
             return
         }
 
         if let enc = cmd.makeComputeCommandEncoder() {
             enc.label = "FEConvert"
             enc.setComputePipelineState(convertPSO)
-            enc.setTexture(srcTex, index: 0)
-            enc.setTexture(slot.dst, index: 1)
+            // slot0 = 单平面纹理；slot1/slot2 = Y / CbCr
+            let blank = src.textures[0]
+            enc.setTexture(src.textures.count > 0 ? src.textures[0] : blank, index: 0)
+            enc.setTexture(src.textures.count > 1 ? src.textures[1] : blank, index: 1)
+            enc.setTexture(blank, index: 2)
+            enc.setTexture(slot.dst, index: 3)
+            var fmt32 = srcFormat
+            enc.setBytes(&fmt32, length: MemoryLayout<UInt32>.size, index: 0)
             enc.dispatchThreadgroups(
                 MTLSize(width: (w + 15) / 16, height: (h + 15) / 16, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
@@ -382,7 +481,7 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
             // 必须等 GPU 用完才能放掉 buffer 包装
             self.lock.lock()
             slot.inFlight = false
-            slot.srcWrapper = nil
+            slot.srcWrappers = []
             self.lock.unlock()
         }
         cmd.commit()

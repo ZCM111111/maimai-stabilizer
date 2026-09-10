@@ -49,6 +49,8 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     @Published var running = false
     @Published var lastError: String?
     @Published var sourceSize: CGSize = .zero
+    /// 实际协商到的像素格式（诊断用）
+    @Published var negotiatedPixelFormat: OSType = 0
 
     private let sessionQueue = DispatchQueue(label: "fe.camera.session")
     private let videoQueue = DispatchQueue(label: "fe.camera.video",
@@ -102,7 +104,9 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: [cam.deviceType],
                                                              mediaType: .video,
                                                              position: .back)
-            guard let device = discovery.devices.first
+            let picked = discovery.devices.first(where: { $0.deviceType == cam.deviceType })
+                ?? discovery.devices.first
+            guard let device = picked
                     ?? AVCaptureDevice.default(cam.deviceType, for: .video, position: .back) else {
                 DispatchQueue.main.async { self.lastError = "找不到该镜头：\(cam.title)" }
                 return
@@ -191,7 +195,9 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             mediaType: .video,
             position: .back)
 
-        guard let device = discovery.devices.first
+        let first = discovery.devices.first(where: { $0.deviceType == backCamera.deviceType })
+        guard let device = first
+                ?? discovery.devices.first
                 ?? AVCaptureDevice.default(backCamera.deviceType, for: .video, position: .back)
                 ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
             finishConfig(error: "找不到可用后置摄像头")
@@ -213,13 +219,16 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         }
 
         let out = AVCaptureVideoDataOutput()
-        out.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
-        ]
+        // 必须按这个输出实际支持的格式来挑。
+        // 文档明确：videoSettings 里只能放 availableVideoPixelFormatTypes 的子集，
+        // 否则系统会忽略整个字典并静默回退到 YUV —— 那正是黑屏的根因。
+        let available = out.availableVideoPixelFormatTypes
+        let chosen = Self.pickPixelFormat(from: available)
+        out.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: chosen]
         out.alwaysDiscardsLateVideoFrames = true          // 宁可丢帧也不堆积延迟
-        out.automaticallyConfiguresOutputBufferDimensions = false
-        out.deliversPreviewSizedOutputBuffers = false
         out.setSampleBufferDelegate(self, queue: videoQueue)
+
+        DispatchQueue.main.async { self.negotiatedPixelFormat = chosen }
 
         guard session.canAddOutput(out) else {
             finishConfig(error: "无法添加视频输出")
@@ -275,6 +284,28 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     private func finishConfig(error: String) {
         session.commitConfiguration()
         DispatchQueue.main.async { self.lastError = error }
+    }
+
+    // MARK: - 像素格式选择
+
+    /// 优先 BGRA（渲染管线直接吃），退而求其次 YUV。
+    static func pickPixelFormat(from available: [OSType]) -> OSType {
+        let prefer: [OSType] = [
+            kCVPixelFormatType_32BGRA,
+            kCVPixelFormatType_32ARGB,
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        ]
+        for p in prefer where available.contains(p) { return p }
+        return available.first ?? kCVPixelFormatType_32BGRA
+    }
+
+    /// OSType -> 可读四字符码
+    static func fourCC(_ code: OSType) -> String {
+        guard code != 0 else { return "----" }
+        let bytes = [UInt8((code >> 24) & 0xFF), UInt8((code >> 16) & 0xFF),
+                     UInt8((code >> 8) & 0xFF), UInt8(code & 0xFF)]
+        return String(bytes.map { (32...126).contains($0) ? Character(UnicodeScalar($0)) : "?" })
     }
 
     // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
