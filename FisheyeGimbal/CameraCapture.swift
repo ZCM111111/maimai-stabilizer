@@ -64,6 +64,7 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     /// 追加一行诊断（可从任意线程调用）
     func noteDiag(_ line: String) {
         print("[CAM] \(line)")
+        RemoteLog.shared.log("CAM", line)
         DispatchQueue.main.async {
             self.diagLines.append(line)
             if self.diagLines.count > 14 { self.diagLines.removeFirst(self.diagLines.count - 14) }

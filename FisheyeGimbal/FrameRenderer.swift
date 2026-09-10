@@ -317,7 +317,11 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
             + " tex\(hadTex ? "Y" : "N") nil\(nilTex) rb\(rebuilds)"
             + " dw\(Int(dSize.width))x\(Int(dSize.height)) rpd\(rf)/v\(vf) why=\(why)"
 
-        if s != hudText { hudText = s }
+        if s != hudText {
+            hudText = s
+            // 实时推到电脑（节流：只在内容变化时发）
+            RemoteLog.shared.log("HUD", s)
+        }
         if motionActive != fresh { motionActive = fresh }
     }
 

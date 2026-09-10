@@ -263,7 +263,41 @@ struct ControlPanel: View {
                             .font(.caption2)
                         Toggle("跳过姿态补偿", isOn: $params.poseBypass)
                             .font(.caption2)
-                        Text("测试图能看到环 = shader 在跑；\n环可见但正常模式全黑 = 数学问题。")
+
+                        Divider()
+                        Text("实时日志（推到电脑）").font(.caption2).bold()
+                        Toggle("开启", isOn: Binding(
+                            get: { RemoteLog.shared.enabled },
+                            set: { RemoteLog.shared.setEnabled($0) }))
+                            .font(.caption2)
+                        HStack(spacing: 4) {
+                            TextField("电脑IP", text: Binding(
+                                get: { RemoteLog.shared.host },
+                                set: { RemoteLog.shared.host = $0 }))
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11, design: .monospaced))
+                                .keyboardType(.numbersAndPunctuation)
+                                .autocorrectionDisabled()
+                            TextField("端口", text: Binding(
+                                get: { RemoteLog.shared.port },
+                                set: { RemoteLog.shared.port = $0 }))
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11, design: .monospaced))
+                                .frame(width: 54)
+                                .keyboardType(.numberPad)
+                        }
+                        Text("手机IP \(RemoteLog.localIP)")
+                            .font(.caption2)
+                            .foregroundStyle(Color.green)
+                        if RemoteLog.shared.sentLines > 0 {
+                            Text("已发送 \(RemoteLog.shared.sentLines) 行")
+                                .font(.caption2)
+                                .foregroundStyle(Color.secondary)
+                        }
+                        if let e = RemoteLog.shared.lastError {
+                            Text(e).font(.caption2).foregroundStyle(Color.red)
+                        }
+                        Text("电脑上跑 listen-log.ps1 接收")
                             .font(.caption2)
                             .foregroundStyle(Color.secondary)
                     }

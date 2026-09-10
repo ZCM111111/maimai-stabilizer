@@ -16,6 +16,7 @@
 		BB00000000000000000008 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000008 /* Shaders.metal */; };
 		BB00000000000000000009 /* TunableParams.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000B /* TunableParams.swift */; };
 		BB0000000000000000000A /* InterfaceOrientationTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000C /* InterfaceOrientationTracker.swift */; };
+		BB0000000000000000000B /* RemoteLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D /* RemoteLog.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +31,7 @@
 		AA0000000000000000000A /* FisheyeGimbal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FisheyeGimbal.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000B /* TunableParams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunableParams.swift; sourceTree = "<group>"; };
 		AA0000000000000000000C /* InterfaceOrientationTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfaceOrientationTracker.swift; sourceTree = "<group>"; };
+		AA0000000000000000000D /* RemoteLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLog.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -62,6 +64,7 @@
 				AA00000000000000000006 /* FrameRenderer.swift */,
 				AA0000000000000000000B /* TunableParams.swift */,
 				AA0000000000000000000C /* InterfaceOrientationTracker.swift */,
+				AA0000000000000000000D /* RemoteLog.swift */,
 				AA00000000000000000008 /* Shaders.metal */,
 				AA00000000000000000009 /* Info.plist */,
 			);
@@ -152,6 +155,7 @@
 				BB00000000000000000006 /* FrameRenderer.swift in Sources */,
 				BB00000000000000000009 /* TunableParams.swift in Sources */,
 				BB0000000000000000000A /* InterfaceOrientationTracker.swift in Sources */,
+				BB0000000000000000000B /* RemoteLog.swift in Sources */,
 				BB00000000000000000008 /* Shaders.metal in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
