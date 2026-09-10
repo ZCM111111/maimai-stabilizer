@@ -57,7 +57,7 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             IPHONEOS_DEPLOYMENT_TARGET=16.0 \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
-            MARKETING_VERSION=${{ steps.xc.outputs.version }} \
+            MARKETING_VERSION=${{ github.run_number }} \
             clean build > xcodebuild.log 2>&1
           RC=$?
           echo "xcodebuild exit = $RC"

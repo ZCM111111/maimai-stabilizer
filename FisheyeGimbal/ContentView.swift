@@ -92,6 +92,8 @@ struct ContentView: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    Text("版本: " + Bundle.main.appBuildLabel)
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
                     Text("渲染: " + (container.renderer?.hudText ?? "渲染器未初始化"))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .fixedSize(horizontal: false, vertical: true)
@@ -409,6 +411,17 @@ struct MetalPreviewContainer: UIViewRepresentable {
             mtk.drawableSize = CGSize(width: size.width * scale, height: size.height * scale)
         }
         mtk.draw()
+    }
+}
+
+// MARK: - 版本号
+
+extension Bundle {
+    /// 形如 "1.0 (42)"，用来确认手机上装的到底是哪一次构建
+    var appBuildLabel: String {
+        let v = infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(v) (\(b))"
     }
 }
 
