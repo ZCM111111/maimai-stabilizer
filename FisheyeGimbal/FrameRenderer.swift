@@ -144,6 +144,14 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     private var lastDrawIndex = -1
     private var lastDrawableSize: CGSize = .zero
     private var lastDrawFrameBytes = 0
+    /// 失败原因（noDrawable / noRPD / noCmdBuf / encoderNil / noTexture）
+    private var failReason = "无"
+    /// render pass 颜色附件纹理格式 与 view 声明格式（两者不一致会导致 encoder 创建失败）
+    private var rpdFormat = "?"
+    private var viewFormat = "?"
+    /// MTKView 实际几何（判断 drawable 为 0 是不是因为 view 本身没尺寸）
+    private var viewBoundsSize: CGSize = .zero
+    private var viewScale: CGFloat = 0
 
     // MARK: - uniform & 统计
 
@@ -265,6 +273,11 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         let drewIdx = lastDrawIndex
         let dSize = lastDrawableSize
         let slotN = slots.count
+        let why = failReason
+        let rf = rpdFormat
+        let vf = viewFormat
+        let bnd = viewBoundsSize
+        let sc = viewScale
         lock.unlock()
 
         // 帧到达情况：超过 0.5 秒没新帧就算断了
@@ -289,13 +302,15 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
 
         // 四字符格式码，例如 BGRA / 420f（YUV 全范围）/ 420v
         let fcc = Self.fourCC(fmt)
-        let s = String(format: "arr%d fps%.0f %@ %@ 丢%d | draw%d %@ idx%d/%d tex%@ %.0fx%.0f",
+        let s = String(format: "arr%d fps%.0f %@ %@ 丢%d | draw%d %@ idx%d/%d tex%@ dw%.0fx%.0f bd%.0fx%.0f sc%.1f rpd%@/v%@ why=%@",
                        arrivedFrames, localFPS, stage, fcc,
                        droppedFrames + unsupported,
-                       draws, encodedOK ? "编码ok" : "编码失败",
+                       draws, encodedOK ? "ok" : "FAIL",
                        drewIdx, slotN,
                        hadTex ? "有" : "无",
-                       dSize.width, dSize.height)
+                       dSize.width, dSize.height,
+                       bnd.width, bnd.height, sc,
+                       rf, vf, why)
 
         if s != hudText { hudText = s }
         if motionActive != fresh { motionActive = fresh }
@@ -525,9 +540,18 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
-        guard let drawable = view.currentDrawable,
-              let rpd = view.currentRenderPassDescriptor,
-              let cmd = queue.makeCommandBuffer() else { return }
+        guard let drawable = view.currentDrawable else {
+            lock.lock(); failReason = "noDrawable"; lock.unlock()
+            return
+        }
+        guard let rpd = view.currentRenderPassDescriptor else {
+            lock.lock(); failReason = "noRPD"; lock.unlock()
+            return
+        }
+        guard let cmd = queue.makeCommandBuffer() else {
+            lock.lock(); failReason = "noCmdBuf"; lock.unlock()
+            return
+        }
 
         let now = CACurrentMediaTime()
         let drawableSize = view.drawableSize
@@ -572,25 +596,41 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         lastDrawHadTexture = (tex != nil)
         lastDrawIndex = idx
         lastDrawableSize = drawableSize
-        lastDrawFrameBytes = MemoryLayout<FEUniforms>.stride
+        let texFmt = rpd.colorAttachments[0].texture?.pixelFormat
+        let rpdFmtText: String
+        if let texFmt {
+            rpdFmtText = "\(texFmt.rawValue)"
+        } else {
+            rpdFmtText = "无纹理"
+        }
+        rpdFormat = rpdFmtText
+        viewFormat = "\(view.colorPixelFormat.rawValue)"
+        viewBoundsSize = view.bounds.size
+        viewScale = view.window?.screen.nativeScale ?? view.contentScaleFactor
         lock.unlock()
 
         let enc = cmd.makeRenderCommandEncoder(descriptor: rpd)
         enc?.label = "FEStabilize"
         var encoded = false
-        if let enc, let tex {
-            enc.setRenderPipelineState(stabilizePSO)
-            enc.setVertexBytes(&u, length: MemoryLayout<FEUniforms>.stride, index: 0)
-            enc.setFragmentBytes(&u, length: MemoryLayout<FEUniforms>.stride, index: 0)
-            enc.setFragmentTexture(tex, index: 0)
-            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        var localReason = ""
+        if enc == nil {
+            localReason = "encoderNil"
+        } else if let tex {
+            enc!.setRenderPipelineState(stabilizePSO)
+            enc!.setVertexBytes(&u, length: MemoryLayout<FEUniforms>.stride, index: 0)
+            enc!.setFragmentBytes(&u, length: MemoryLayout<FEUniforms>.stride, index: 0)
+            enc!.setFragmentTexture(tex, index: 0)
+            enc!.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoded = true
+        } else {
+            localReason = "noTexture"
         }
         enc?.endEncoding()
 
         lock.lock()
         drawEncodedOK = encoded
         drawEncodeCount += 1
+        if !localReason.isEmpty { failReason = localReason }
         lock.unlock()
 
         cmd.present(drawable)
