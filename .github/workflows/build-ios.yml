@@ -19,7 +19,6 @@ jobs:
         run: |
           xcodebuild -version
           sw_vers
-          echo "--- 仓库内容 ---"
           ls -la
 
       - name: 解析 Xcode 版本号
@@ -29,7 +28,7 @@ jobs:
           echo "version=$V" >> $GITHUB_OUTPUT
           echo "Xcode = $V"
 
-      - name: 列出 scheme（先确认 scheme 能被识别）
+      - name: 列出 scheme
         run: |
           xcodebuild -project FisheyeGimbal.xcodeproj -list || true
 
@@ -54,33 +53,22 @@ jobs:
             MARKETING_VERSION=${{ steps.xc.outputs.version }} \
             clean build > xcodebuild.log 2>&1
           RC=$?
-          echo "xcodebuild 退出码 = $RC"
-          echo "=========================== BUILD 结果标记 ==========================="
-          grep -nE "^\*\* BUILD|Testing failed|The following build commands failed" xcodebuild.log | tail -20 || echo "(无)"
-          echo "=========================== error: 行 ==========================="
-          grep -nE "error:|error :|fatal error:" xcodebuild.log | head -80 || echo "(无 error: 行)"
-          echo "=========================== 项目 / scheme 问题 ==========================="
-          grep -niE "cannot be opened|damaged|unsupported|does not contain a scheme|not found|missing the following|is not a valid|requires a provisioning" xcodebuild.log | head -40 || echo "(无)"
-          echo "=========================== 尾部 50 行 ==========================="
-          tail -50 xcodebuild.log
+          echo "xcodebuild exit = $RC"
           echo "RC=$RC" >> $GITHUB_OUTPUT
           exit $RC
 
-      # ---- 诊断步骤：无条件执行，把编译问题直接打到这里 ----
-      - name: 诊断 xcodebuild.log
+      # 把编译问题做成 annotation：annotation 接口公开可读，方便远程排查
+      - name: 诊断（转成 annotation）
         if: always()
         run: |
-          echo "=================== 构建结果标记 ==================="
-          grep -nE "^\*\* BUILD|^BUILD|Testing failed|The following build commands failed" xcodebuild.log | tail -20 || echo "(无 BUILD 标记)"
-          echo ""
-          echo "=================== error: 行 ==================="
-          grep -nE "error:|error :|fatal error:" xcodebuild.log | head -100 || echo "(没有 error: 行)"
-          echo ""
-          echo "=================== 项目/scheme 相关 ==================="
-          grep -niE "cannot be opened|damaged|unsupported|does not contain a scheme|scheme .* not found|missing the following|is not a valid|would you like" xcodebuild.log | head -40 || echo "(无)"
-          echo ""
-          echo "=================== 尾部 60 行 ==================="
-          tail -60 xcodebuild.log
+          echo "=============== BUILD 结果 ==============="
+          grep -nE '^\*\* BUILD|Testing failed|The following build commands failed' xcodebuild.log | tail -10 || true
+          echo "=============== error 行 ==============="
+          grep -nE 'error:|fatal error:' xcodebuild.log | head -50 | tr -d '\r' | tr -cd '\11\12\15\40-\176' | while IFS= read -r l; do echo "::error::DIAG|$l"; done || true
+          echo "=============== 项目/scheme ==============="
+          grep -niE 'cannot be opened|damaged|unsupported|does not contain a scheme|missing the following|is not a valid' xcodebuild.log | head -20 | tr -d '\r' | tr -cd '\11\12\15\40-\176' | while IFS= read -r l; do echo "::error::DIAG|$l"; done || true
+          echo "=============== tail 40 ==============="
+          tail -40 xcodebuild.log | tr -d '\r' | tr -cd '\11\12\15\40-\176' | while IFS= read -r l; do echo "::warning::TAIL|$l"; done || true
 
       - name: 打包成 Payload/FisheyeGimbal.ipa
         if: steps.build.outputs.RC == '0'
@@ -103,8 +91,11 @@ jobs:
           path: out/FisheyeGimbal-unsigned.ipa
           if-no-files-found: error
 
-      - name: 失败则让 job 失败
-        if: steps.build.outputs.RC != '0'
-        run: |
-          echo "编译失败，RC=${{ steps.build.outputs.RC }}，看上面『诊断 xcodebuild.log』那一段"
-          exit 1
+      # 始终上传完整日志：即使前面的诊断步骤没显出问题，日志本身也留着
+      - name: 上传完整编译日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+          if-no-files-found: ignore
