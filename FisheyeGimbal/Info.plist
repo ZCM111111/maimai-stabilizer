@@ -28,6 +28,8 @@
 	<string>需要读取陀螺仪/加速度计来锁定画面朝向，实现云台效果。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>需要保存处理后的照片或录像。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>需要向局域网内的电脑推送实时调试日志，方便排查画面问题。</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
