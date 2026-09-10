@@ -340,8 +340,32 @@ FisheyeGimbal/
    显示用纹理也要占住槽位直到显示 command buffer 结束，否则会撕裂。
 7. **`q` 和 `−q` 是同一个旋转**。所有算角度差的地方都不能直接减分量，
    代码里用姿态矩阵的轴向量投影到水平面算 yaw，绕开双覆盖问题。
-8. **`CVPixelBuffer` 拷贝到纹理必须用 `copy(from:to:)` 那个重载**。
-   带 `sourceBytesPerRow` 参数的版本是给 `MTLBuffer` 源用的，塞 pixel buffer 会编译不过。
-9. **部署目标是 iOS 16**，所以 `.onChange` 用单参闭包版本；
-   两个参数的 `onChange(of:initial:_:)` 是 iOS 17 API。
-   超广角设备类型是 `.builtInUltraWideCamera`（不是 `...UltraWideAngleCamera`）。
+8. **不要给 `AVCaptureVideoDataOutput.videoSettings` 塞不支持的格式。**
+   这个字典只能放 `availableVideoPixelFormatTypes` 的子集。
+   塞了 `kCVPixelFormatType_32BGRA` 但输出不支持它时，**系统会静默忽略整个字典、
+   回退到 YUV(420v/420f)** —— 首版黑屏就是这个原因（`cam 0 fps`、画面全黑）。
+   现在 CameraCapture 会先读可用格式再挑，渲染器同时支持 BGRA 和 YUV420。
+9. **`CVPixelBuffer` 包成 Metal 纹理要用 `CVMetalTextureCache`**，
+   不要用 `blit.copy(from: CVPixelBuffer, to: MTLTexture)` —— 那个重载两边都要
+   `MTLTexture`，塞 pixel buffer 编译不过。
+   YUV 是双平面：plane 0 = Y(`r8Unorm`)、plane 1 = CbCr(`rg8Unorm`，尺寸减半)，
+   包装数组必须持有到 GPU 用完。
+10. **部署目标是 iOS 16**，所以 `.onChange` 用单参闭包版本；
+    两个参数的 `onChange(of:initial:_:)` 是 iOS 17 API。
+    超广角设备类型是 `.builtInUltraWideCamera`（不是 `...UltraWideAngleCamera`）。
+11. **Xcode 26 把 Metal 编译器拆成了可选组件**，CI 上会出现
+    `cannot execute tool 'metal' due to missing Metal Toolchain`。
+    修法：钉 `xcode: 16.4`，或跑 `xcodebuild -downloadComponent MetalToolchain`。
+
+---
+
+## 9. 推送代码时代理挂了怎么办
+
+如果 git 报 `Failed to connect to github.com port 443 via 127.0.0.1`，
+说明本地代理（FlClash 之类）挂了。用这条绕过全局代理直连：
+
+```powershell
+git -c http.proxy= -c https.proxy= push origin main
+```
+
+（github.com 在国内多数网络可以直连，实测 TLS 握手 0.2 秒。）
