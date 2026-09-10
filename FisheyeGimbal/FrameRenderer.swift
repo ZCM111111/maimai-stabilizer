@@ -131,6 +131,8 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     private var textureCache: CVMetalTextureCache?
 
     /// 诊断用：最近一帧到达的时刻、像素格式、被丢掉的格式不符帧数
+    /// （这三个在 enqueue 里赋值、在 updateHUD 里读取，都受 lock 保护）
+    private var lastFrameWall: Double = 0
     private var lastPixelFormat: OSType = 0
     private var unsupportedFormatFrames = 0
 
