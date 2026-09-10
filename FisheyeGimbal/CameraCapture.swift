@@ -38,7 +38,7 @@ final class CameraCapture: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         var deviceType: AVCaptureDevice.DeviceType {
             switch self {
             case .wideAngle: return .builtInWideAngleCamera
-            case .ultraWide: return .builtInUltraWideAngleCamera
+            case .ultraWide: return .builtInUltraWideCamera
             }
         }
     }

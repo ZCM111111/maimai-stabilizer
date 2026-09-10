@@ -86,7 +86,7 @@ struct ContentView: View {
             container.attachCamera(camera)
             container.start()
         }
-        .onChange(of: orientationTracker.orientation) { _, newValue in
+        .onChange(of: orientationTracker.orientation) { newValue in
             params.screenUp = newValue.feScreenUp
             container.redraw()
         }

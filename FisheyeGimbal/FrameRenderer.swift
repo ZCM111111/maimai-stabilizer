@@ -316,16 +316,11 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
             return
         }
 
-        let bpr = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        // 把 CVPixelBuffer 拷进私有纹理。
+        // 注意：必须用 copy(from: CVPixelBuffer, to: MTLTexture) 这个重载，
+        // 不能塞 sourceBytesPerRow / sourceSize 那套参数 —— 那是给 MTLBuffer 源用的。
         if let blit = cmd.makeBlitCommandEncoder() {
-            blit.copy(from: pixelBuffer,
-                      sourceSize: MTLSize(width: w, height: h, depth: 1),
-                      to: slot.src,
-                      destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                      sourceBytesPerRow: bpr,
-                      sourceBytesPerImage: bpr * h,
-                      sourceSize2: MTLSize(width: w, height: h, depth: 1),
-                      sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+            blit.copy(from: pixelBuffer, to: slot.src)
             blit.endEncoding()
         }
 
