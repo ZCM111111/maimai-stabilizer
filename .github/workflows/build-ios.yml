@@ -6,20 +6,25 @@ on:
     tags: [ 'v*' ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     # macos-14 = Apple Silicon runner，装的是 Xcode 15.x
+    # 注意：私有仓库的 macOS runner 是 10 倍计费倍率；公开仓库 Actions 免费。
     runs-on: macos-14
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: 环境信息
         run: |
           xcodebuild -version
           sw_vers
-          echo "--- repo ---"
           ls -la
 
       - name: 解析 Xcode 版本号
@@ -33,8 +38,6 @@ jobs:
         run: |
           xcodebuild -project FisheyeGimbal.xcodeproj -list
 
-      # 全量输出写进 xcodebuild.log，只把尾部刷到 GitHub 日志里防超限。
-      # 真正的报错靠下面「导出成 annotation」那一步带出来。
       - name: 编译（不签名，产 .app）
         id: build
         run: |
@@ -55,32 +58,12 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=16.0 \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             MARKETING_VERSION=${{ steps.xc.outputs.version }} \
-            clean build 2>&1 | tee xcodebuild.log | tail -c 6000000
-          RC=${PIPESTATUS[0]}
+            clean build > xcodebuild.log 2>&1
+          RC=$?
+          echo "xcodebuild exit = $RC"
           echo "RC=$RC" >> $GITHUB_OUTPUT
+          tail -20 xcodebuild.log
           exit $RC
-
-      - name: 结果概要
-        if: always()
-        run: |
-          echo "commit = ${{ github.sha }}"
-          echo "build RC = ${{ steps.build.outputs.RC }}"
-          echo "日志字节数 = $(wc -c < xcodebuild.log)"
-          echo "日志行数   = $(wc -l < xcodebuild.log)"
-          echo "=== error 行 ==="
-          grep -nE 'error:|fatal error:' xcodebuild.log || echo "(无 error 行)"
-
-      # 无论成败都把日志尾部做成 annotation。
-      # annotations 接口是公开可读的，而 step log 不是 —— 这条通道是远程排查的唯一出路。
-      - name: 把日志尾部导出成 annotation
-        if: always()
-        run: |
-          N=0
-          tail -45 xcodebuild.log | tr -d '\r' | tr -cd '\11\12\15\40-\176' | while IFS= read -r l; do
-            N=$((N+1))
-            printf '::error::LOG%d|%s\n' "$N" "$l"
-          done
-          echo "::notice::已导出日志尾行"
 
       - name: 打包成 Payload/FisheyeGimbal.ipa
         if: steps.build.outputs.RC == '0'
@@ -103,10 +86,30 @@ jobs:
           path: out/FisheyeGimbal-unsigned.ipa
           if-no-files-found: error
 
-      - name: 上传完整编译日志
+      # 把完整日志推到孤儿分支 build-log，这样用 raw.githubusercontent.com
+      # 就能直接读到全文（不需要认证、不消耗 API 配额）。
+      # 远程排查完可以随时删掉这个分支。
+      - name: 把完整日志推到 build-log 分支
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xcodebuild-log
-          path: xcodebuild.log
-          if-no-files-found: ignore
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -x
+          wc -c xcodebuild.log
+          mkdir -p /tmp/logpub
+          cp xcodebuild.log /tmp/logpub/xcodebuild.log
+          cat > /tmp/logpub/meta.txt <<EOF
+          sha=${{ github.sha }}
+          run=${{ github.run_id }}
+          build_RC=${{ steps.build.outputs.RC }}
+          xcode_version=${{ steps.xc.outputs.version }}
+          EOF
+          cd /tmp/logpub
+          git init -q -b build-log
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "build log for ${{ github.sha }}"
+          git push --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            build-log:build-log || echo "推送日志分支失败（不影响构建结论）"
