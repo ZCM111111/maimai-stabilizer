@@ -267,6 +267,7 @@ struct ControlPanel: View {
                             Text("4 中心红点").tag(4)
                             Text("5 姿态矩阵数值").tag(5)
                             Text("6 目标纹理直采").tag(6)
+                            Text("7 uniform 数值").tag(7)
                         }
                         .pickerStyle(.menu)
                         .font(.caption2)

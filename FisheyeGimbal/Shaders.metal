@@ -171,6 +171,32 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
     // 3 = 采样算出的 UV 坐标着色（红=u 绿=v，验证去畸变算出的坐标范围）
     // 4 = 只画中心 60px 圆点  （验证原始像素到屏幕的通路）
     uint mode = feMode(u);
+    if (mode == 7u) {
+        // 把 uniform 里的关键数值直接画成色块，用来核对硬件里真实拿到的值。
+        // offset +0.5 映射到中灰(0.5)，所以中灰 = 0。
+        // 6 条横带，从上到下：
+        //   1) srcSize.x / 4096      期望 1920/4096 = 0.469
+        //   2) srcSize.y / 4096      期望 1080/4096 = 0.264
+        //   3) center.x  / 4096      期望 960/4096  = 0.234
+        //   4) center.y  / 4096      期望 540/4096  = 0.132
+        //   5) focal     / 4096      期望 360/4096  = 0.088
+        //   6) maxR      / 4096      期望 540/4096  = 0.132
+        // 看颜色深了还是浅了，就能反推出真值对不对。
+        float yy = in.uv.y;                       // -1 下  ..  +1 上
+        int slot = int(floor((1.0f - yy) * 3.0f));  // 0..5，0 在最上
+        float val = 0.0f;
+        if      (slot == 0) { val = srcSize.x / 4096.0f; }
+        else if (slot == 1) { val = srcSize.y / 4096.0f; }
+        else if (slot == 2) { val = center.x  / 4096.0f; }
+        else if (slot == 3) { val = center.y  / 4096.0f; }
+        else if (slot == 4) { val = focal     / 4096.0f; }
+        else                { val = maxR      / 4096.0f; }
+        float3 col7 = float3(val, val, val);
+        // 每条带画一根白色细线分隔
+        float frac6 = (1.0f - yy) * 3.0f - floor((1.0f - yy) * 3.0f);
+        if (frac6 < 0.02f) { col7 = float3(1.0f, 1.0f, 1.0f); }
+        return float4(col7, 1.0f);
+    }
     if (mode == 6u) {
         // 验证进入 fragment 的那个纹理到底是哪个。
         // 如果这个有画面 -> mode 0 黑的锅不在纹理绑定
