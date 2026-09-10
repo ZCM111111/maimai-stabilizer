@@ -33,15 +33,14 @@ jobs:
         run: |
           xcodebuild -project FisheyeGimbal.xcodeproj -list
 
-      # 关键：不加重定向、加 -quiet。
-      # -quiet 会把几千行正常编译输出压掉，只留警告和错误，
-      # 于是编译失败时错误行必然出现在这一步的公开 step log 里。
-      # tee 只是为了同时留一份给 artifact。
+      # 不重定向、不加 -quiet：让 xcodebuild 全量输出进 step log，
+      # 这样本地拿不到 artifact 时也能从公开接口读到真实报错。
+      # 用 tee 写日志，tail -c 限制 GitHub 上的显示量防止超出日志上限。
       - name: 编译（不签名，产 .app）
         id: build
         run: |
           set -o pipefail
-          xcodebuild -quiet \
+          xcodebuild \
             -project FisheyeGimbal.xcodeproj \
             -scheme FisheyeGimbal \
             -configuration Release \
@@ -57,9 +56,8 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=16.0 \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             MARKETING_VERSION=${{ steps.xc.outputs.version }} \
-            clean build 2>&1 | tee xcodebuild.log
+            clean build 2>&1 | tee xcodebuild.log | tail -c 6000000
           RC=${PIPESTATUS[0]}
-          echo "::notice::xcodebuild 退出码 = $RC"
           echo "RC=$RC" >> $GITHUB_OUTPUT
           exit $RC
 
@@ -68,12 +66,14 @@ jobs:
         run: |
           echo "commit = ${{ github.sha }}"
           echo "build RC = ${{ steps.build.outputs.RC }}"
-          echo "=== BUILD 标记 ==="
-          grep -cE '.' xcodebuild.log || true
+          echo "日志字节数 = $(wc -c < xcodebuild.log)"
+          echo "日志行数   = $(wc -l < xcodebuild.log)"
           echo "=== error 行 ==="
           grep -nE 'error:|fatal error:' xcodebuild.log || echo "(无 error 行)"
-          echo "=== 末尾 30 行 ==="
-          tail -30 xcodebuild.log
+          echo "=== 关键标记 ==="
+          grep -nE '\*\* BUILD |Testing failed|The following build commands failed|Cannot|Unable to|requires a provisioning' xcodebuild.log | head -30 || echo "(无)"
+          echo "=== 末尾 40 行 ==="
+          tail -40 xcodebuild.log
 
       - name: 打包成 Payload/FisheyeGimbal.ipa
         if: steps.build.outputs.RC == '0'
