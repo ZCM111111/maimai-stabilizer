@@ -265,6 +265,7 @@ struct ControlPanel: View {
                             Text("2 直接采样源纹理").tag(2)
                             Text("3 UV 坐标着色").tag(3)
                             Text("4 中心红点").tag(4)
+                            Text("5 姿态矩阵数值").tag(5)
                         }
                         .pickerStyle(.menu)
                         .font(.caption2)

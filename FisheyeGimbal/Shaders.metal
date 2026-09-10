@@ -171,6 +171,22 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
     // 3 = 采样算出的 UV 坐标着色（红=u 绿=v，验证去畸变算出的坐标范围）
     // 4 = 只画中心 60px 圆点  （验证原始像素到屏幕的通路）
     uint mode = feMode(u);
+    if (mode == 5u) {
+        // 把 rawRotation 的数值直接画出来：offset +0.5，所以中灰(0.5)代表 0
+        // 画面分三横条：上=第0列(纹理+u轴) 中=第1列 下=第2列
+        // 每列三个分量映射到 R,G,B。
+        // 期望：纹理坐标轴基向量 → 每行应有一个分量接近 ±1（亮或全黑），其余接近 0（中灰）
+        int band = (in.uv.y > 0.3333f) ? ((in.uv.y > -0.3333f) ? 1 : 0) : 2;   // 上0 中1 下2
+        float3 v;
+        if (band == 0)      { v = u.rawRotation[0].xyz; }   // 第0列
+        else if (band == 1) { v = u.rawRotation[1].xyz; }   // 第1列
+        else                { v = u.rawRotation[2].xyz; }   // 第2列
+        float3 col5 = clamp(v * 0.5f + 0.5f, 0.0f, 1.0f);
+        // 画条细分隔线
+        float ay = abs(in.uv.y);
+        if (abs(ay - 0.3333f) < 0.004f) { col5 = float3(1.0f, 1.0f, 1.0f); }
+        return float4(col5, 1.0f);
+    }
     if (mode == 1u) {
         float2 c2 = in.uv;
         float rr = length(c2);
@@ -235,8 +251,8 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
 
     // ---- 4) 计算到源图像素坐标 ----
     float theta = acos(clamp(dot(P, f), -1.0f, 1.0f));
-    if (theta > maxTheta) {
-        if (mode == 3u) { return float4(1.0f, 1.0f, 1.0f, 1.0f); }  // 白 = 超出 maxTheta
+    bool overTheta = (theta > maxTheta);
+    if (overTheta && mode != 3u) {
         return float4(0.0f, 0.0f, 0.0f, 1.0f);   // 超出镜头视野 -> 黑边
     }
 
@@ -247,16 +263,22 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
     float2 offset = (xy > 1e-6f) ? (float2(x, y) / xy * r) : float2(0.0f, 0.0f);
     float2 srcPix = center + offset;
 
-    // 模式 3：把算出的源像素坐标直接染色，用来验证坐标是否落在合理范围
+    // 模式 3：把算出的源像素坐标直接染色，验证坐标是否落在合理范围
     //   红 = x 方向（0 左 1 右），绿 = y 方向（0 上 1 下）
-    //   出界 -> 品红；超出 maxTheta -> 白
+    //   品红 = 采样坐标出界；该像素加红 = 超出 maxTheta
+    //   注意：这里不能直接 return 白色，否则全屏都判超限时什么都看不到
     if (mode == 3u) {
-        if (srcPix.x < 0.0f || srcPix.y < 0.0f ||
-            srcPix.x > srcSize.x || srcPix.y > srcSize.y) {
-            return float4(1.0f, 0.0f, 1.0f, 1.0f);      // 品红 = 采样坐标出界
+        bool outOfBounds = (srcPix.x < 0.0f || srcPix.y < 0.0f ||
+                            srcPix.x > srcSize.x || srcPix.y > srcSize.y);
+        float3 col3;
+        if (outOfBounds) {
+            col3 = float3(1.0f, 0.0f, 1.0f);          // 品红 = 出界
+        } else {
+            float2 n = clamp(srcPix / srcSize, 0.0f, 1.0f);
+            col3 = float3(n.x, n.y, 0.2f);
         }
-        float2 n = srcPix / srcSize;
-        return float4(n.x, n.y, 0.2f, 1.0f);
+        if (overTheta) { col3.r = 1.0f; }             // 超 maxTheta 叠加红
+        return float4(col3, 1.0f);
     }
 
     // ---- 5) 采样（越界就黑掉，避免 clamp_to_edge 拉出条纹）----
