@@ -363,6 +363,10 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
             uniforms.focal = params.focalScale * rMax
         }
         uniforms.screenUp = params.screenUp
+        // screenUp_.z 同时打包两个诊断开关：高 16 位=测试图，低 16 位=姿态旁路
+        let diagBits: UInt32 = ((params.showTestPattern ? 1 : 0) << 16)
+                             | (params.poseBypass ? 1 : 0)
+        uniforms.screenUp_.z = Float(bitPattern: diagBits)
     }
 
     /// 源帧分辨率变化时重建纹理池。

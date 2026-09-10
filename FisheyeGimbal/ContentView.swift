@@ -256,6 +256,16 @@ struct ControlPanel: View {
                             }
                         }
                         .pickerStyle(.segmented)
+
+                        Divider()
+                        Text("诊断").font(.caption2).bold()
+                        Toggle("显示测试图（同心环）", isOn: $params.showTestPattern)
+                            .font(.caption2)
+                        Toggle("跳过姿态补偿", isOn: $params.poseBypass)
+                            .font(.caption2)
+                        Text("测试图能看到环 = shader 在跑；\n环可见但正常模式全黑 = 数学问题。")
+                            .font(.caption2)
+                            .foregroundStyle(Color.secondary)
                     }
                     .padding(.top, 6)
                 }

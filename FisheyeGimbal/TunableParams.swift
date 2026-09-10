@@ -55,6 +55,12 @@ final class TunableParams: ObservableObject {
     /// 屏幕上方在源帧平面内的方向（由界面方向决定）
     var screenUp: SIMD2<Float> = SIMD2<Float>(0, -1) { didSet { changed() } }
 
+    /// 诊断开关：画同心圆环测试图（验证 shader 是否在跑、输出是否可见）
+    @Published var showTestPattern = false { didSet { changed() } }
+
+    /// 诊断开关：跳过姿态补偿，直接取原始鱼眼画面（区分"数学错"还是"姿态错"）
+    @Published var poseBypass = false { didSet { changed() } }
+
     /// 源分辨率（renderer 写入，UI 只读显示）
     @Published var sourceSize: CGSize = .zero
 }

@@ -39,6 +39,10 @@ using namespace metal;
 //   offset 144 : screenUp + pad       (16)
 //   总计 160 字节。全部落在 16 字节边界上，
 //   Metal 和 Swift 不会有任何"各自插 padding"的分歧。
+//
+//   诊断复用（screenUp_.z，as_type 成 uint，同时存两个开关）：
+//     高 16 位 = 测试图模式  0=关 1=同心环
+//     低 16 位 = 姿态旁路    0=正常 1=跳过姿态补偿（直接取原始画面）
 struct FEUniforms {
     float4x4 rawRotation   [[id(0)]];   // 0   : 源帧坐标系<-世界系的旋转
     float4   viewDirW      [[id(1)]];   // 64  : 锁定的世界朝向（源帧坐标系中）
@@ -46,7 +50,7 @@ struct FEUniforms {
     float4   slots1        [[id(3)]];   // 96  : xy = center,  z = focal, w = fOutX
     float4   slots2        [[id(4)]];   // 112 : x = fOutY, y = projection, z = k1, w = k2
     float4   slots3        [[id(5)]];   // 128 : x = maxTheta, y = maxR, z = edgeFeather, w = exposure
-    float4   screenUp_     [[id(6)]];   // 144 : xy = screenUp, zw = reserved
+    float4   screenUp_     [[id(6)]];   // 144 : xy = screenUp, z = 诊断开关(打包)
 };
 
 static inline float2 feSrcSize(constant FEUniforms &u)  { return u.slots0.xy; }
@@ -63,6 +67,8 @@ static inline float  feMaxR(constant FEUniforms &u)     { return u.slots3.y; }
 static inline float  feFeather(constant FEUniforms &u)  { return u.slots3.z; }
 static inline float  feExposure(constant FEUniforms &u) { return u.slots3.w; }
 static inline float2 feScreenUp(constant FEUniforms &u) { return u.screenUp_.xy; }
+static inline uint   feTestPattern(constant FEUniforms &u) { return as_type<uint>(u.screenUp_.z) >> 16; }
+static inline uint   fePoseBypass(constant FEUniforms &u)  { return as_type<uint>(u.screenUp_.z) & 0xFFFFu; }
 
 // equisolid: r = 2 f sin(theta/2)
 static inline float feRadiusFromTheta(float theta, float f, float model) {
@@ -157,6 +163,20 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
     float  eFeather = feFeather(u);
     float2 screenUp = feScreenUp(u);
 
+    // ---- 0a) 测试图模式：证明 shader 确实在跑、输出确实可见 ----
+    // 看不到同心环 = shader 没执行（管线/PSO 的问题）
+    // 看到同心环但正常模式全黑 = 数学算出来的就是黑的
+    if (feTestPattern(u) != 0u) {
+        float2 c2 = in.uv;
+        float rr = length(c2);
+        float ring = fract(rr * 6.0f);
+        float3 tp = (ring < 0.5f) ? float3(1.0f, 0.3f, 0.0f)
+                                  : float3(0.0f, 0.05f, 0.35f);
+        if (rr < 0.45f) { tp = float3(0.0f, 0.9f, 0.1f); }
+        if (rr > 0.95f) { tp = float3(1.0f, 1.0f, 1.0f); }
+        return float4(tp, 1.0f);
+    }
+
     // ---- 1) 该像素对应的输出小孔光线（右手系：x 右、y 下、z 前）----
     float2 ndc = in.uv;                       // [-1,1]
     float2 pixel = float2((ndc.x + 1.0f) * 0.5f * outSize.x,
@@ -165,13 +185,16 @@ fragment float4 FEStabilizeFragment(FEVertexOut in [[stage_in]],
     float3 dirView = normalize(float3(d.x, d.y, 1.0f));
 
     // ---- 2) 转到源帧坐标系 ----
-    float3 dirS = normalize((u.rawRotation * float4(dirView, 0.0f)).xyz);
+    // 旁路模式下跳过姿态补偿，直接取原始鱼眼画面（用来区分"数学错"还是"姿态错"）
+    bool bypass = (fePoseBypass(u) != 0u);
+    float4x4 rot = bypass ? float4x4(1.0f) : u.rawRotation;
+    float3 dirS = normalize((rot * float4(dirView, 0.0f)).xyz);
 
     // 世界系中锁定的朝向，转到源帧坐标系
-    float3 f = (u.rawRotation * float4(normalize(u.viewDirW.xyz), 0.0f)).xyz;
+    float3 f = (rot * float4(normalize(u.viewDirW.xyz), 0.0f)).xyz;
 
     // ---- 3) 对齐屏幕方向（竖屏/横屏时旋转 90°）----
-    float3 screenUpRaw = (u.rawRotation * float4(screenUp.x, screenUp.y, 0.0f, 0.0f)).xyz;
+    float3 screenUpRaw = (rot * float4(screenUp.x, screenUp.y, 0.0f, 0.0f)).xyz;
     float3 planeUp = screenUpRaw - f * dot(screenUpRaw, f);
     float ul = length(planeUp);
     if (ul < 1e-5f) {
