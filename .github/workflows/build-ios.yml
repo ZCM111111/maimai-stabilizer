@@ -19,6 +19,7 @@ jobs:
         run: |
           xcodebuild -version
           sw_vers
+          echo "--- repo ---"
           ls -la
 
       - name: 解析 Xcode 版本号
@@ -28,14 +29,19 @@ jobs:
           echo "version=$V" >> $GITHUB_OUTPUT
           echo "Xcode = $V"
 
-      - name: 列出 scheme
+      - name: 列出 scheme 与配置
         run: |
-          xcodebuild -project FisheyeGimbal.xcodeproj -list || true
+          xcodebuild -project FisheyeGimbal.xcodeproj -list
 
+      # 关键：不加重定向、加 -quiet。
+      # -quiet 会把几千行正常编译输出压掉，只留警告和错误，
+      # 于是编译失败时错误行必然出现在这一步的公开 step log 里。
+      # tee 只是为了同时留一份给 artifact。
       - name: 编译（不签名，产 .app）
         id: build
         run: |
-          xcodebuild \
+          set -o pipefail
+          xcodebuild -quiet \
             -project FisheyeGimbal.xcodeproj \
             -scheme FisheyeGimbal \
             -configuration Release \
@@ -51,24 +57,23 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=16.0 \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             MARKETING_VERSION=${{ steps.xc.outputs.version }} \
-            clean build > xcodebuild.log 2>&1
-          RC=$?
-          echo "xcodebuild exit = $RC"
+            clean build 2>&1 | tee xcodebuild.log
+          RC=${PIPESTATUS[0]}
+          echo "::notice::xcodebuild 退出码 = $RC"
           echo "RC=$RC" >> $GITHUB_OUTPUT
           exit $RC
 
-      # 把编译问题做成 annotation：annotation 接口公开可读，方便远程排查
-      - name: 诊断（转成 annotation）
+      - name: 结果概要
         if: always()
         run: |
-          echo "=============== BUILD 结果 ==============="
-          grep -nE '^\*\* BUILD|Testing failed|The following build commands failed' xcodebuild.log | tail -10 || true
-          echo "=============== error 行 ==============="
-          grep -nE 'error:|fatal error:' xcodebuild.log | head -50 | tr -d '\r' | tr -cd '\11\12\15\40-\176' | while IFS= read -r l; do echo "::error::DIAG|$l"; done || true
-          echo "=============== 项目/scheme ==============="
-          grep -niE 'cannot be opened|damaged|unsupported|does not contain a scheme|missing the following|is not a valid' xcodebuild.log | head -20 | tr -d '\r' | tr -cd '\11\12\15\40-\176' | while IFS= read -r l; do echo "::error::DIAG|$l"; done || true
-          echo "=============== tail 40 ==============="
-          tail -40 xcodebuild.log | tr -d '\r' | tr -cd '\11\12\15\40-\176' | while IFS= read -r l; do echo "::warning::TAIL|$l"; done || true
+          echo "commit = ${{ github.sha }}"
+          echo "build RC = ${{ steps.build.outputs.RC }}"
+          echo "=== BUILD 标记 ==="
+          grep -cE '.' xcodebuild.log || true
+          echo "=== error 行 ==="
+          grep -nE 'error:|fatal error:' xcodebuild.log || echo "(无 error 行)"
+          echo "=== 末尾 30 行 ==="
+          tail -30 xcodebuild.log
 
       - name: 打包成 Payload/FisheyeGimbal.ipa
         if: steps.build.outputs.RC == '0'
@@ -91,7 +96,6 @@ jobs:
           path: out/FisheyeGimbal-unsigned.ipa
           if-no-files-found: error
 
-      # 始终上传完整日志：即使前面的诊断步骤没显出问题，日志本身也留着
       - name: 上传完整编译日志
         if: always()
         uses: actions/upload-artifact@v4
