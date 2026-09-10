@@ -135,6 +135,15 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
     private var lastFrameWall: Double = 0
     private var lastPixelFormat: OSType = 0
     private var unsupportedFormatFrames = 0
+    /// 进入 enqueue 的帧数（用来确认摄像头帧到底有没有到渲染器）
+    private var enqueuedFrames = 0
+    /// 绘制阶段诊断
+    private var drawEncodeCount = 0
+    private var drawEncodedOK = false
+    private var lastDrawHadTexture = false
+    private var lastDrawIndex = -1
+    private var lastDrawableSize: CGSize = .zero
+    private var lastDrawFrameBytes = 0
 
     // MARK: - uniform & 统计
 
@@ -249,6 +258,13 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         let fmt = lastPixelFormat
         let unsupported = unsupportedFormatFrames
         let localFPS = cameraFPS
+        let arrivedFrames = enqueuedFrames
+        let draws = drawEncodeCount
+        let encodedOK = drawEncodedOK
+        let hadTex = lastDrawHadTexture
+        let drewIdx = lastDrawIndex
+        let dSize = lastDrawableSize
+        let slotN = slots.count
         lock.unlock()
 
         // 帧到达情况：超过 0.5 秒没新帧就算断了
@@ -273,8 +289,13 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
 
         // 四字符格式码，例如 BGRA / 420f（YUV 全范围）/ 420v
         let fcc = Self.fourCC(fmt)
-        let s = String(format: "cam %.0f · %.0f rps · %@ · %@ · 丢%d",
-                       localFPS, renderFPS, stage, fcc, droppedFrames + unsupported)
+        let s = String(format: "arr%d fps%.0f %@ %@ 丢%d | draw%d %@ idx%d/%d tex%@ %.0fx%.0f",
+                       arrivedFrames, localFPS, stage, fcc,
+                       droppedFrames + unsupported,
+                       draws, encodedOK ? "编码ok" : "编码失败",
+                       drewIdx, slotN,
+                       hadTex ? "有" : "无",
+                       dSize.width, dSize.height)
 
         if s != hudText { hudText = s }
         if motionActive != fresh { motionActive = fresh }
@@ -411,6 +432,7 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
         lock.lock()
         lastFrameWall = CACurrentMediaTime()
         lastPixelFormat = fmt
+        enqueuedFrames += 1
         lock.unlock()
 
         // 只接受我们确实能转成 RGBA 的格式（BGRA / YUV420 双平面）
@@ -546,18 +568,31 @@ final class FrameRenderer: NSObject, MTKViewDelegate {
             // 否则新到的摄像头帧可能复用它，GPU 上出现「读的同时在写」→ 画面撕裂/闪白。
             slots[idx].inFlight = true
         }
+        // 诊断：记录这一帧的实际状态
+        lastDrawHadTexture = (tex != nil)
+        lastDrawIndex = idx
+        lastDrawableSize = drawableSize
+        lastDrawFrameBytes = MemoryLayout<FEUniforms>.stride
         lock.unlock()
 
         let enc = cmd.makeRenderCommandEncoder(descriptor: rpd)
         enc?.label = "FEStabilize"
+        var encoded = false
         if let enc, let tex {
             enc.setRenderPipelineState(stabilizePSO)
             enc.setVertexBytes(&u, length: MemoryLayout<FEUniforms>.stride, index: 0)
             enc.setFragmentBytes(&u, length: MemoryLayout<FEUniforms>.stride, index: 0)
             enc.setFragmentTexture(tex, index: 0)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            encoded = true
         }
         enc?.endEncoding()
+
+        lock.lock()
+        drawEncodedOK = encoded
+        drawEncodeCount += 1
+        lock.unlock()
+
         cmd.present(drawable)
         cmd.addCompletedHandler { [weak self] _ in
             guard let self, idx >= 0 else { return }
